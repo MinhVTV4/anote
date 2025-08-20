@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Agentic System Demo - Giao diện Chat</title>
+    <title>Agentic System Demo - Mức độ ưu tiên</title>
     <!-- TailwindCSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Marked.js CDN -->
@@ -63,7 +63,7 @@
 
         <footer id="controls" class="p-4 border-t bg-gray-50 rounded-b-xl flex-shrink-0">
             <div class="relative">
-                <textarea id="promptInput" rows="1" class="w-full p-3 pr-14 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 resize-none" placeholder="Nhập hoặc nói..." disabled></textarea>
+                <textarea id="promptInput" rows="1" class="w-full p-3 pr-14 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 resize-none" placeholder="Thử: 'ngày mai và ngày kia có gì?'" disabled></textarea>
                 <button id="micButton" title="Bắt đầu ghi âm" class="mic-btn absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-full text-gray-500 hover:bg-gray-100 hover:text-blue-600 transition-colors" disabled>
                     <i data-lucide="mic" class="w-5 h-5"></i>
                 </button>
@@ -165,7 +165,11 @@
           async saveNote(args) {
             if (!currentUser) return { type: 'message', data: 'Lỗi: Vui lòng đăng nhập.' };
             const notesCollection = collection(db, 'users', currentUser.uid, 'notes');
-            await addDoc(notesCollection, { text: args.text, createdAt: new Date() });
+            await addDoc(notesCollection, { 
+                text: args.text, 
+                createdAt: new Date(),
+                priority: args.priority || 'medium'
+            });
             return { type: 'message', data: `✅ Đã lưu ghi chú: "${args.text}"` };
           },
           async getAllNotesFromFirestore() {
@@ -173,7 +177,8 @@
             const notesCollection = collection(db, 'users', currentUser.uid, 'notes');
             const q = query(notesCollection, orderBy("createdAt", "desc"));
             const snapshot = await getDocs(q);
-            const notes = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            let notes = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            notes = sortWithPriority(notes);
             if (notes.length === 0) return { type: 'message', data: "🤔 Bạn chưa có ghi chú nào." };
             return { type: 'notes', data: notes };
           },
@@ -185,7 +190,8 @@
             const notesCollection = collection(db, 'users', currentUser.uid, 'notes');
             const q = query(notesCollection, where("createdAt", ">=", startDate), where("createdAt", "<=", endDate), orderBy("createdAt", "desc"));
             const snapshot = await getDocs(q);
-            const notes = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            let notes = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            notes = sortWithPriority(notes);
             if (notes.length === 0) return { type: 'message', data: `🤔 Bạn không có ghi chú nào cho ngày ${targetDate.toLocaleDateString('vi-VN')}.` };
             return { type: 'notes', data: notes };
           },
@@ -198,7 +204,10 @@
           async updateNoteInFirestore(args) {
              if (!currentUser) return { type: 'message', data: 'Lỗi: Vui lòng đăng nhập.' };
              const noteRef = doc(db, 'users', currentUser.uid, 'notes', args.id);
-             await updateDoc(noteRef, { text: args.newText });
+             const updateData = {};
+             if (args.newText) updateData.text = args.newText;
+             if (args.newPriority) updateData.priority = args.newPriority;
+             await updateDoc(noteRef, updateData);
              return this.getAllNotesFromFirestore();
           },
           async createReminder(args) {
@@ -208,7 +217,8 @@
                 title: args.title, 
                 reminderTime: new Date(args.reminderTime),
                 createdAt: new Date(),
-                triggered: false
+                triggered: false,
+                priority: args.priority || 'medium'
             });
             return { type: 'message', data: `✅ Đã tạo lời nhắc: "${args.title}"` };
           },
@@ -217,7 +227,8 @@
             const remindersCollection = collection(db, 'users', currentUser.uid, 'reminders');
             const q = query(remindersCollection, orderBy("reminderTime", "asc"));
             const snapshot = await getDocs(q);
-            const reminders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            let reminders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            reminders = sortWithPriority(reminders);
             if (reminders.length === 0) return { type: 'message', data: "🤔 Bạn chưa có lời nhắc nào." };
             return { type: 'reminders', data: reminders };
           },
@@ -229,7 +240,8 @@
             const remindersCollection = collection(db, 'users', currentUser.uid, 'reminders');
             const q = query(remindersCollection, where("reminderTime", ">=", startDate), where("reminderTime", "<=", endDate), orderBy("reminderTime", "asc"));
             const snapshot = await getDocs(q);
-            const reminders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            let reminders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            reminders = sortWithPriority(reminders);
             if (reminders.length === 0) return { type: 'message', data: `🤔 Bạn không có lời nhắc nào cho ngày ${targetDate.toLocaleDateString('vi-VN')}.` };
             return { type: 'reminders', data: reminders };
           },
@@ -237,8 +249,9 @@
              if (!currentUser) return { type: 'message', data: 'Lỗi: Vui lòng đăng nhập.' };
              const reminderRef = doc(db, 'users', currentUser.uid, 'reminders', args.id);
              const updateData = {};
-             if (args.newTitle) { updateData.title = args.newTitle; }
-             if (args.newTime) { updateData.reminderTime = new Date(args.newTime); }
+             if (args.newTitle) updateData.title = args.newTitle;
+             if (args.newTime) updateData.reminderTime = new Date(args.newTime);
+             if (args.newPriority) updateData.priority = args.newPriority;
              if (Object.keys(updateData).length > 0) {
                 await updateDoc(reminderRef, updateData);
              }
@@ -257,21 +270,22 @@
             const snapshot = await getDocs(q);
             const events = snapshot.docs.map(doc => {
                 const reminder = doc.data();
-                return { id: doc.id, title: reminder.title, start: reminder.reminderTime.toDate().toISOString(), allDay: false, color: reminder.triggered ? '#a3a3a3' : '#3b82f6' };
+                const priorityColors = { high: '#ef4444', medium: '#f59e0b', low: '#6b7280' };
+                return { id: doc.id, title: reminder.title, start: reminder.reminderTime.toDate().toISOString(), allDay: false, color: reminder.triggered ? '#a3a3a3' : (priorityColors[reminder.priority] || '#3b82f6') };
             });
             return { type: 'calendar', data: events };
           }
         };
         const tools = [{ functionDeclarations: [
-            { name: "saveNote", description: "Lưu một ghi chú.", parameters: { type: "object", properties: { "text": { "type": "string" } }, required: ["text"] } },
+            { name: "saveNote", description: "Lưu một ghi chú.", parameters: { type: "object", properties: { "text": { "type": "string" }, "priority": { "type": "string", "description": "Mức độ ưu tiên: 'high', 'medium', 'low'. Mặc định là 'medium'." } }, required: ["text"] } },
             { name: "getAllNotesFromFirestore", description: "Lấy và hiển thị TẤT CẢ các ghi chú.", parameters: { type: "object", properties: {} } },
             { name: "getNotesForDate", description: "Lấy danh sách các ghi chú được tạo trong một ngày cụ thể.", parameters: { type: "object", properties: { "date": { "type": "string", "description": "Ngày cần lấy ghi chú, định dạng YYYY-MM-DD." } }, required: ["date"] } },
             { name: "deleteNoteFromFirestore", description: "Xóa một ghi chú dựa trên ID.", parameters: { type: "object", properties: { "id": { "type": "string" } }, required: ["id"] } },
-            { name: "updateNoteInFirestore", description: "Cập nhật nội dung một ghi chú.", parameters: { type: "object", properties: { "id": { "type": "string" }, "newText": { "type": "string" } }, required: ["id", "newText"] } },
-            { name: "createReminder", description: "Tạo một lịch hẹn hoặc lời nhắc.", parameters: { type: "object", properties: { "title": { "type": "string" }, "reminderTime": { "type": "string", "description": "Thời gian nhắc, định dạng ISO 8601." } }, required: ["title", "reminderTime"] } },
+            { name: "updateNoteInFirestore", description: "Cập nhật nội dung và/hoặc độ ưu tiên của một ghi chú.", parameters: { type: "object", properties: { "id": { "type": "string" }, "newText": { "type": "string" }, "newPriority": { "type": "string" } }, required: ["id"] } },
+            { name: "createReminder", description: "Tạo một lịch hẹn hoặc lời nhắc.", parameters: { type: "object", properties: { "title": { "type": "string" }, "reminderTime": { "type": "string", "description": "Thời gian nhắc, định dạng ISO 8601." }, "priority": { "type": "string", "description": "Mức độ ưu tiên: 'high', 'medium', 'low'. Mặc định là 'medium'." } }, required: ["title", "reminderTime"] } },
             { name: "getAllRemindersFromFirestore", description: "Lấy và hiển thị TẤT CẢ các lời nhắc.", parameters: { type: "object", properties: {} } },
             { name: "getRemindersForDate", description: "Lấy danh sách các lời nhắc cho một ngày cụ thể.", parameters: { type: "object", properties: { "date": { "type": "string", "description": "Ngày cần lấy lời nhắc, định dạng YYYY-MM-DD." } }, required: ["date"] } },
-            { name: "updateReminderInFirestore", description: "Cập nhật nội dung và/hoặc thời gian của một lời nhắc.", parameters: { type: "object", properties: { "id": { "type": "string" }, "newTitle": { "type": "string" }, "newTime": { "type": "string", "description": "Thời gian mới, định dạng ISO 8601."} }, required: ["id"] } },
+            { name: "updateReminderInFirestore", description: "Cập nhật nội dung, thời gian và/hoặc độ ưu tiên của một lời nhắc.", parameters: { type: "object", properties: { "id": { "type": "string" }, "newTitle": { "type": "string" }, "newTime": { "type": "string", "description": "Thời gian mới, định dạng ISO 8601."}, "newPriority": { "type": "string" } }, required: ["id"] } },
             { name: "deleteReminderFromFirestore", description: "Xóa một lời nhắc dựa trên ID.", parameters: { type: "object", properties: { "id": { "type": "string" } }, required: ["id"] } },
             { name: "getEventsForCalendar", description: "Lấy tất cả sự kiện, lời nhắc để hiển thị trên lịch.", parameters: { type: "object", properties: {} } }
         ] }];
@@ -350,26 +364,41 @@
                 let response = result.response;
                 let functionCalls = response.functionCalls();
                 
+                // FIXED: Logic to handle multiple function calls in one turn
                 while (functionCalls && functionCalls.length > 0) {
                     const functionResponses = [];
-                    let hasRenderedUI = false;
+                    let hasRenderedSomething = false;
+
                     for (const func of functionCalls) {
                         if (agentFunctions[func.name]) {
                             const functionResult = await agentFunctions[func.name](func.args);
+                            
                             if (['notes', 'reminders', 'calendar'].includes(functionResult.type)) {
                                 appendAIMessage(functionResult);
-                                hasRenderedUI = true;
-                                break; 
+                                hasRenderedSomething = true;
+                            } else {
+                                functionResponses.push({ functionResponse: { name: func.name, response: functionResult } });
                             }
-                            functionResponses.push({ functionResponse: { name: func.name, response: functionResult } });
                         }
                     }
-                    if (hasRenderedUI) { setControlsEnabled(true); return; }
-                    result = await chat.sendMessage(functionResponses);
-                    response = result.response;
-                    functionCalls = response.functionCalls();
+
+                    if (hasRenderedSomething) {
+                        setControlsEnabled(true);
+                        return;
+                    }
+                    
+                    if (functionResponses.length > 0) {
+                        result = await chat.sendMessage(functionResponses);
+                        response = result.response;
+                        functionCalls = response.functionCalls();
+                    } else {
+                        functionCalls = null; // No more calls to process
+                    }
                 }
+
+                removeTypingIndicator();
                 appendAIMessage({ type: 'message', data: response.text() });
+
             } catch (error) {
                 appendAIMessage({ type: 'message', data: `**Lỗi:** ${error.message}.` });
             } finally {
@@ -421,16 +450,28 @@
             const indicator = document.getElementById('typing-indicator');
             if (indicator) indicator.remove();
         }
+        function getPriorityClass(priority) {
+            switch (priority) {
+                case 'high': return 'border-l-4 border-red-500';
+                case 'medium': return 'border-l-4 border-yellow-500';
+                case 'low': return 'border-l-4 border-gray-400';
+                default: return 'border-l-4 border-gray-200';
+            }
+        }
+        function sortWithPriority(items) {
+            const priorityOrder = { 'high': 3, 'medium': 2, 'low': 1 };
+            return items.sort((a, b) => (priorityOrder[b.priority] || 0) - (priorityOrder[a.priority] || 0));
+        }
         function createNoteCard(note) {
             const card = document.createElement('div');
-            card.className = 'bg-gray-50 p-4 rounded-lg border border-gray-200 flex justify-between items-start gap-4';
+            card.className = `bg-gray-50 p-4 rounded-lg flex justify-between items-start gap-4 ${getPriorityClass(note.priority)}`;
             card.innerHTML = `
                 <div class="flex-grow">
                     <p class="text-gray-800">${note.text}</p>
                     <p class="text-xs text-gray-500 mt-2">Tạo lúc: ${formatTimestamp(note.createdAt.toDate())}</p>
                 </div>
                 <div class="flex-shrink-0 flex items-center gap-2">
-                    <button data-note-id="${note.id}" data-note-text="${escapeHTML(note.text)}" title="Sửa ghi chú" class="edit-btn p-2 text-blue-500 hover:text-blue-700 hover:bg-blue-100 rounded-full"><i data-lucide="file-pen-line" class="w-4 h-4 pointer-events-none"></i></button>
+                    <button data-note-id="${note.id}" data-note-text="${escapeHTML(note.text)}" data-note-priority="${note.priority || 'medium'}" title="Sửa ghi chú" class="edit-btn p-2 text-blue-500 hover:text-blue-700 hover:bg-blue-100 rounded-full"><i data-lucide="file-pen-line" class="w-4 h-4 pointer-events-none"></i></button>
                     <button data-note-id="${note.id}" title="Xóa ghi chú" class="delete-btn p-2 text-red-500 hover:text-red-700 hover:bg-red-100 rounded-full"><i data-lucide="trash-2" class="w-4 h-4 pointer-events-none"></i></button>
                 </div>`;
             return card;
@@ -440,7 +481,7 @@
             const isTriggered = reminder.triggered;
             const reminderDate = reminder.reminderTime.toDate();
             const localISOString = new Date(reminderDate.getTime() - (reminderDate.getTimezoneOffset() * 60000)).toISOString().slice(0, 16);
-            card.className = `bg-yellow-50 p-4 rounded-lg border border-yellow-200 flex justify-between items-start gap-4 ${isTriggered ? 'opacity-50' : ''}`;
+            card.className = `bg-yellow-50 p-4 rounded-lg flex justify-between items-start gap-4 ${getPriorityClass(reminder.priority)} ${isTriggered ? 'opacity-50' : ''}`;
             card.innerHTML = `
                 <div class="flex-grow">
                     <p class="text-gray-800 font-medium ${isTriggered ? 'line-through' : ''}">${reminder.title}</p>
@@ -450,7 +491,7 @@
                     </p>
                 </div>
                 <div class="flex-shrink-0 flex items-center gap-2">
-                    <button data-reminder-id="${reminder.id}" data-reminder-title="${escapeHTML(reminder.title)}" data-reminder-time="${localISOString}" title="Sửa lời nhắc" class="edit-reminder-btn p-2 text-blue-500 hover:text-blue-700 hover:bg-blue-100 rounded-full"><i data-lucide="file-pen-line" class="w-4 h-4 pointer-events-none"></i></button>
+                    <button data-reminder-id="${reminder.id}" data-reminder-title="${escapeHTML(reminder.title)}" data-reminder-time="${localISOString}" data-reminder-priority="${reminder.priority || 'medium'}" title="Sửa lời nhắc" class="edit-reminder-btn p-2 text-blue-500 hover:text-blue-700 hover:bg-blue-100 rounded-full"><i data-lucide="file-pen-line" class="w-4 h-4 pointer-events-none"></i></button>
                     <button data-reminder-id="${reminder.id}" title="Xóa lời nhắc" class="delete-reminder-btn p-2 text-red-500 hover:text-red-700 hover:bg-red-100 rounded-full"><i data-lucide="trash-2" class="w-4 h-4 pointer-events-none"></i></button>
                 </div>`;
             return card;
@@ -564,30 +605,46 @@
             } else if (editBtn) {
                 const id = editBtn.dataset.noteId;
                 const currentText = editBtn.dataset.noteText;
+                const currentPriority = editBtn.dataset.notePriority;
                 showModal(
                     `Chỉnh sửa ghi chú`,
-                    `<textarea id="modalInput" class="w-full p-2 border rounded-md">${currentText}</textarea>`,
+                    `<div class="space-y-4">
+                        <div>
+                            <label for="modalInputText" class="block text-sm font-medium text-gray-700">Nội dung</label>
+                            <textarea id="modalInputText" class="mt-1 w-full p-2 border rounded-md">${currentText}</textarea>
+                        </div>
+                        <div>
+                            <label for="modalInputPriority" class="block text-sm font-medium text-gray-700">Ưu tiên</label>
+                            <select id="modalInputPriority" class="mt-1 w-full p-2 border rounded-md">
+                                <option value="low" ${currentPriority === 'low' ? 'selected' : ''}>Thấp</option>
+                                <option value="medium" ${currentPriority === 'medium' ? 'selected' : ''}>Trung bình</option>
+                                <option value="high" ${currentPriority === 'high' ? 'selected' : ''}>Cao</option>
+                            </select>
+                        </div>
+                    </div>`,
                     `<button id="cancelEditBtn" class="px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300">Hủy</button>
                      <button id="confirmEditBtn" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">Lưu</button>`
                 );
-                const modalInput = document.getElementById('modalInput');
-                modalInput.focus();
+                const modalInputText = document.getElementById('modalInputText');
+                modalInputText.focus();
                 document.getElementById('cancelEditBtn').onclick = hideModal;
                 document.getElementById('confirmEditBtn').onclick = async () => {
-                    const newText = modalInput.value.trim();
-                    if (newText && newText !== currentText) {
+                    const newText = modalInputText.value.trim();
+                    const newPriority = document.getElementById('modalInputPriority').value;
+                    if ((newText && newText !== currentText) || newPriority !== currentPriority) {
                         hideModal();
                         setControlsEnabled(false);
                         appendTypingIndicator();
-                        const result = await agentFunctions.updateNoteInFirestore({ id, newText });
+                        const result = await agentFunctions.updateNoteInFirestore({ id, newText, newPriority });
                         appendAIMessage(result);
                         setControlsEnabled(true);
-                    }
+                    } else { hideModal(); }
                 };
             } else if (editReminderBtn) {
                 const id = editReminderBtn.dataset.reminderId;
                 const currentTitle = editReminderBtn.dataset.reminderTitle;
                 const currentTime = editReminderBtn.dataset.reminderTime;
+                const currentPriority = editReminderBtn.dataset.reminderPriority;
                 showModal(
                     `Chỉnh sửa lời nhắc`,
                     `<div class="space-y-4">
@@ -599,27 +656,33 @@
                             <label for="modalInputTime" class="block text-sm font-medium text-gray-700">Thời gian</label>
                             <input type="datetime-local" id="modalInputTime" class="mt-1 w-full p-2 border rounded-md" value="${currentTime}">
                         </div>
+                        <div>
+                            <label for="modalInputPriority" class="block text-sm font-medium text-gray-700">Ưu tiên</label>
+                            <select id="modalInputPriority" class="mt-1 w-full p-2 border rounded-md">
+                                <option value="low" ${currentPriority === 'low' ? 'selected' : ''}>Thấp</option>
+                                <option value="medium" ${currentPriority === 'medium' ? 'selected' : ''}>Trung bình</option>
+                                <option value="high" ${currentPriority === 'high' ? 'selected' : ''}>Cao</option>
+                            </select>
+                        </div>
                     </div>`,
                     `<button id="cancelEditBtn" class="px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300">Hủy</button>
                      <button id="confirmEditBtn" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">Lưu</button>`
                 );
                 const modalInputTitle = document.getElementById('modalInputTitle');
-                const modalInputTime = document.getElementById('modalInputTime');
                 modalInputTitle.focus();
                 document.getElementById('cancelEditBtn').onclick = hideModal;
                 document.getElementById('confirmEditBtn').onclick = async () => {
                     const newTitle = modalInputTitle.value.trim();
-                    const newTime = modalInputTime.value;
-                    if ((newTitle && newTitle !== currentTitle) || (newTime && newTime !== currentTime)) {
+                    const newTime = document.getElementById('modalInputTime').value;
+                    const newPriority = document.getElementById('modalInputPriority').value;
+                    if ((newTitle && newTitle !== currentTitle) || (newTime && newTime !== currentTime) || newPriority !== currentPriority) {
                         hideModal();
                         setControlsEnabled(false);
                         appendTypingIndicator();
-                        const result = await agentFunctions.updateReminderInFirestore({ id, newTitle, newTime });
+                        const result = await agentFunctions.updateReminderInFirestore({ id, newTitle, newTime, newPriority });
                         appendAIMessage(result);
                         setControlsEnabled(true);
-                    } else {
-                        hideModal();
-                    }
+                    } else { hideModal(); }
                 };
             }
         });
