@@ -35,6 +35,9 @@
         .fc-event { font-size: 0.8rem !important; }
         .tab-btn { transition: all 0.2s ease-in-out; }
         .tab-btn.active { border-color: #3b82f6; color: #3b82f6; background-color: #eff6ff; }
+
+        /* Modal styles */
+        #customModal { transition: opacity 0.3s ease; }
     </style>
 </head>
 <body class="bg-gray-100 flex flex-col items-center h-screen p-2 sm:p-4">
@@ -73,6 +76,20 @@
         </footer>
     </div>
 
+    <!-- Custom Modal -->
+    <div id="customModal" class="fixed inset-0 bg-gray-800 bg-opacity-60 overflow-y-auto h-full w-full hidden z-50 flex items-center justify-center">
+        <div id="modalContentContainer" class="relative mx-auto p-6 border w-full max-w-md shadow-lg rounded-xl bg-white transform transition-all scale-95 opacity-0">
+            <h3 class="text-xl text-center font-semibold text-gray-900" id="modalTitle"></h3>
+            <div class="mt-4" id="modalBody">
+                <!-- Modal content (message or input) goes here -->
+            </div>
+            <div class="mt-6 flex justify-end space-x-3" id="modalActions">
+                <!-- Modal buttons go here -->
+            </div>
+        </div>
+    </div>
+
+
     <script type="module">
         // --- STEP 1 & 2: Firebase and DOM Elements ---
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.9.0/firebase-app.js";
@@ -102,6 +119,11 @@
         const sendPromptButton = document.getElementById('sendPromptButton');
         const micButton = document.getElementById('micButton');
         const statusMessage = document.getElementById('statusMessage');
+        const customModal = document.getElementById('customModal');
+        const modalContentContainer = document.getElementById('modalContentContainer');
+        const modalTitle = document.getElementById('modalTitle');
+        const modalBody = document.getElementById('modalBody');
+        const modalActions = document.getElementById('modalActions');
 
         let model, chat, currentUser, reminderIntervalId;
 
@@ -214,7 +236,12 @@
           async updateReminderInFirestore(args) {
              if (!currentUser) return { type: 'message', data: 'Lỗi: Vui lòng đăng nhập.' };
              const reminderRef = doc(db, 'users', currentUser.uid, 'reminders', args.id);
-             await updateDoc(reminderRef, { title: args.newTitle });
+             const updateData = {};
+             if (args.newTitle) { updateData.title = args.newTitle; }
+             if (args.newTime) { updateData.reminderTime = new Date(args.newTime); }
+             if (Object.keys(updateData).length > 0) {
+                await updateDoc(reminderRef, updateData);
+             }
              return this.getAllRemindersFromFirestore();
           },
           async deleteReminderFromFirestore(args) {
@@ -244,7 +271,7 @@
             { name: "createReminder", description: "Tạo một lịch hẹn hoặc lời nhắc.", parameters: { type: "object", properties: { "title": { "type": "string" }, "reminderTime": { "type": "string", "description": "Thời gian nhắc, định dạng ISO 8601." } }, required: ["title", "reminderTime"] } },
             { name: "getAllRemindersFromFirestore", description: "Lấy và hiển thị TẤT CẢ các lời nhắc.", parameters: { type: "object", properties: {} } },
             { name: "getRemindersForDate", description: "Lấy danh sách các lời nhắc cho một ngày cụ thể.", parameters: { type: "object", properties: { "date": { "type": "string", "description": "Ngày cần lấy lời nhắc, định dạng YYYY-MM-DD." } }, required: ["date"] } },
-            { name: "updateReminderInFirestore", description: "Cập nhật nội dung của một lời nhắc.", parameters: { type: "object", properties: { "id": { "type": "string" }, "newTitle": { "type": "string" } }, required: ["id", "newTitle"] } },
+            { name: "updateReminderInFirestore", description: "Cập nhật nội dung và/hoặc thời gian của một lời nhắc.", parameters: { type: "object", properties: { "id": { "type": "string" }, "newTitle": { "type": "string" }, "newTime": { "type": "string", "description": "Thời gian mới, định dạng ISO 8601."} }, required: ["id"] } },
             { name: "deleteReminderFromFirestore", description: "Xóa một lời nhắc dựa trên ID.", parameters: { type: "object", properties: { "id": { "type": "string" } }, required: ["id"] } },
             { name: "getEventsForCalendar", description: "Lấy tất cả sự kiện, lời nhắc để hiển thị trên lịch.", parameters: { type: "object", properties: {} } }
         ] }];
@@ -350,7 +377,7 @@
             }
         }
 
-        // --- STEP 8: Chat UI Helper Functions ---
+        // --- STEP 8: Chat UI and Modal Helper Functions ---
         function setControlsEnabled(enabled, status = '') {
             promptInput.disabled = !enabled;
             sendPromptButton.disabled = !enabled;
@@ -378,7 +405,6 @@
             div.appendChild(bubble);
             chatContainer.appendChild(div);
             scrollToBottom();
-            // FIXED: Call createIcons AFTER the content is in the DOM
             if (typeof lucide !== 'undefined') {
                 lucide.createIcons();
             }
@@ -412,17 +438,19 @@
         function createReminderCard(reminder) {
             const card = document.createElement('div');
             const isTriggered = reminder.triggered;
+            const reminderDate = reminder.reminderTime.toDate();
+            const localISOString = new Date(reminderDate.getTime() - (reminderDate.getTimezoneOffset() * 60000)).toISOString().slice(0, 16);
             card.className = `bg-yellow-50 p-4 rounded-lg border border-yellow-200 flex justify-between items-start gap-4 ${isTriggered ? 'opacity-50' : ''}`;
             card.innerHTML = `
                 <div class="flex-grow">
                     <p class="text-gray-800 font-medium ${isTriggered ? 'line-through' : ''}">${reminder.title}</p>
                     <p class="text-sm text-yellow-800 mt-1 flex items-center gap-2">
                         <i data-lucide="bell" class="w-4 h-4"></i>
-                        <span>${formatTimestamp(reminder.reminderTime.toDate())}</span>
+                        <span>${formatTimestamp(reminderDate)}</span>
                     </p>
                 </div>
                 <div class="flex-shrink-0 flex items-center gap-2">
-                    <button data-reminder-id="${reminder.id}" data-reminder-title="${escapeHTML(reminder.title)}" title="Sửa lời nhắc" class="edit-reminder-btn p-2 text-blue-500 hover:text-blue-700 hover:bg-blue-100 rounded-full"><i data-lucide="file-pen-line" class="w-4 h-4 pointer-events-none"></i></button>
+                    <button data-reminder-id="${reminder.id}" data-reminder-title="${escapeHTML(reminder.title)}" data-reminder-time="${localISOString}" title="Sửa lời nhắc" class="edit-reminder-btn p-2 text-blue-500 hover:text-blue-700 hover:bg-blue-100 rounded-full"><i data-lucide="file-pen-line" class="w-4 h-4 pointer-events-none"></i></button>
                     <button data-reminder-id="${reminder.id}" title="Xóa lời nhắc" class="delete-reminder-btn p-2 text-red-500 hover:text-red-700 hover:bg-red-100 rounded-full"><i data-lucide="trash-2" class="w-4 h-4 pointer-events-none"></i></button>
                 </div>`;
             return card;
@@ -462,6 +490,25 @@
         }
         function formatTimestamp(date) { return date.toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric' }); }
         
+        // Modal Functions
+        function showModal(title, bodyHtml, actionsHtml) {
+            modalTitle.textContent = title;
+            modalBody.innerHTML = bodyHtml;
+            modalActions.innerHTML = actionsHtml;
+            customModal.classList.remove('hidden');
+            setTimeout(() => {
+                modalContentContainer.classList.remove('scale-95', 'opacity-0');
+                modalContentContainer.classList.add('scale-100', 'opacity-100');
+            }, 10);
+        }
+        function hideModal() {
+            modalContentContainer.classList.add('scale-95', 'opacity-0');
+            modalContentContainer.classList.remove('scale-100', 'opacity-100');
+            setTimeout(() => {
+                customModal.classList.add('hidden');
+            }, 200);
+        }
+
         // --- STEP 9: Event Listeners ---
         document.getElementById('showSignup').addEventListener('click', (e) => { e.preventDefault(); document.getElementById('loginView').classList.add('hidden'); document.getElementById('signupView').classList.remove('hidden'); });
         document.getElementById('showLogin').addEventListener('click', (e) => { e.preventDefault(); document.getElementById('signupView').classList.add('hidden'); document.getElementById('loginView').classList.remove('hidden'); });
@@ -488,46 +535,92 @@
                 return;
             }
 
-            let result;
-            let shouldShowLoading = true;
-            
             const editBtn = event.target.closest('.edit-btn');
             const deleteBtn = event.target.closest('.delete-btn');
-            if (editBtn) {
-                const newText = prompt("Nhập nội dung mới cho ghi chú:", editBtn.dataset.noteText);
-                if (newText && newText.trim() !== editBtn.dataset.noteText.trim()) {
-                    result = await agentFunctions.updateNoteInFirestore({ id: editBtn.dataset.noteId, newText: newText.trim() });
-                } else { shouldShowLoading = false; }
-            } else if (deleteBtn) {
-                if (confirm('Bạn có chắc chắn muốn xóa ghi chú này?')) {
-                    result = await agentFunctions.deleteNoteFromFirestore({ id: deleteBtn.dataset.noteId });
-                } else { shouldShowLoading = false; }
-            }
-
             const editReminderBtn = event.target.closest('.edit-reminder-btn');
             const deleteReminderBtn = event.target.closest('.delete-reminder-btn');
-            if (editReminderBtn) {
-                const newTitle = prompt("Nhập nội dung mới cho lời nhắc:", editReminderBtn.dataset.reminderTitle);
-                if (newTitle && newTitle.trim() !== editReminderBtn.dataset.reminderTitle.trim()) {
-                    result = await agentFunctions.updateReminderInFirestore({ id: editReminderBtn.dataset.reminderId, newTitle: newTitle.trim() });
-                } else { shouldShowLoading = false; }
-            } else if (deleteReminderBtn) {
-                 if (confirm('Bạn có chắc chắn muốn xóa lời nhắc này?')) {
-                    result = await agentFunctions.deleteReminderFromFirestore({ id: deleteReminderBtn.dataset.reminderId });
-                } else { shouldShowLoading = false; }
-            }
 
-            if(shouldShowLoading) {
-                setControlsEnabled(false);
-                appendTypingIndicator();
-            }
-
-            if (result) {
-                appendAIMessage(result);
-            }
-            
-            if (shouldShowLoading) {
-                setControlsEnabled(true);
+            if (deleteBtn || deleteReminderBtn) {
+                const isNote = !!deleteBtn;
+                const id = isNote ? deleteBtn.dataset.noteId : deleteReminderBtn.dataset.reminderId;
+                const typeText = isNote ? 'ghi chú' : 'lời nhắc';
+                showModal(
+                    `Xác nhận Xóa`,
+                    `<p class="text-sm text-gray-500">Bạn có chắc chắn muốn xóa ${typeText} này không?</p>`,
+                    `<button id="cancelDeleteBtn" class="px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300">Hủy</button>
+                     <button id="confirmDeleteBtn" class="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700">Xóa</button>`
+                );
+                document.getElementById('cancelDeleteBtn').onclick = hideModal;
+                document.getElementById('confirmDeleteBtn').onclick = async () => {
+                    hideModal();
+                    setControlsEnabled(false);
+                    appendTypingIndicator();
+                    const result = isNote 
+                        ? await agentFunctions.deleteNoteFromFirestore({ id })
+                        : await agentFunctions.deleteReminderFromFirestore({ id });
+                    appendAIMessage(result);
+                    setControlsEnabled(true);
+                };
+            } else if (editBtn) {
+                const id = editBtn.dataset.noteId;
+                const currentText = editBtn.dataset.noteText;
+                showModal(
+                    `Chỉnh sửa ghi chú`,
+                    `<textarea id="modalInput" class="w-full p-2 border rounded-md">${currentText}</textarea>`,
+                    `<button id="cancelEditBtn" class="px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300">Hủy</button>
+                     <button id="confirmEditBtn" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">Lưu</button>`
+                );
+                const modalInput = document.getElementById('modalInput');
+                modalInput.focus();
+                document.getElementById('cancelEditBtn').onclick = hideModal;
+                document.getElementById('confirmEditBtn').onclick = async () => {
+                    const newText = modalInput.value.trim();
+                    if (newText && newText !== currentText) {
+                        hideModal();
+                        setControlsEnabled(false);
+                        appendTypingIndicator();
+                        const result = await agentFunctions.updateNoteInFirestore({ id, newText });
+                        appendAIMessage(result);
+                        setControlsEnabled(true);
+                    }
+                };
+            } else if (editReminderBtn) {
+                const id = editReminderBtn.dataset.reminderId;
+                const currentTitle = editReminderBtn.dataset.reminderTitle;
+                const currentTime = editReminderBtn.dataset.reminderTime;
+                showModal(
+                    `Chỉnh sửa lời nhắc`,
+                    `<div class="space-y-4">
+                        <div>
+                            <label for="modalInputTitle" class="block text-sm font-medium text-gray-700">Nội dung</label>
+                            <input type="text" id="modalInputTitle" class="mt-1 w-full p-2 border rounded-md" value="${currentTitle}">
+                        </div>
+                        <div>
+                            <label for="modalInputTime" class="block text-sm font-medium text-gray-700">Thời gian</label>
+                            <input type="datetime-local" id="modalInputTime" class="mt-1 w-full p-2 border rounded-md" value="${currentTime}">
+                        </div>
+                    </div>`,
+                    `<button id="cancelEditBtn" class="px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300">Hủy</button>
+                     <button id="confirmEditBtn" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">Lưu</button>`
+                );
+                const modalInputTitle = document.getElementById('modalInputTitle');
+                const modalInputTime = document.getElementById('modalInputTime');
+                modalInputTitle.focus();
+                document.getElementById('cancelEditBtn').onclick = hideModal;
+                document.getElementById('confirmEditBtn').onclick = async () => {
+                    const newTitle = modalInputTitle.value.trim();
+                    const newTime = modalInputTime.value;
+                    if ((newTitle && newTitle !== currentTitle) || (newTime && newTime !== currentTime)) {
+                        hideModal();
+                        setControlsEnabled(false);
+                        appendTypingIndicator();
+                        const result = await agentFunctions.updateReminderInFirestore({ id, newTitle, newTime });
+                        appendAIMessage(result);
+                        setControlsEnabled(true);
+                    } else {
+                        hideModal();
+                    }
+                };
             }
         });
 
