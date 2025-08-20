@@ -211,7 +211,6 @@
             if (reminders.length === 0) return { type: 'message', data: `🤔 Bạn không có lời nhắc nào cho ngày ${targetDate.toLocaleDateString('vi-VN')}.` };
             return { type: 'reminders', data: reminders };
           },
-          // NEW: Function to update a reminder
           async updateReminderInFirestore(args) {
              if (!currentUser) return { type: 'message', data: 'Lỗi: Vui lòng đăng nhập.' };
              const reminderRef = doc(db, 'users', currentUser.uid, 'reminders', args.id);
@@ -245,7 +244,6 @@
             { name: "createReminder", description: "Tạo một lịch hẹn hoặc lời nhắc.", parameters: { type: "object", properties: { "title": { "type": "string" }, "reminderTime": { "type": "string", "description": "Thời gian nhắc, định dạng ISO 8601." } }, required: ["title", "reminderTime"] } },
             { name: "getAllRemindersFromFirestore", description: "Lấy và hiển thị TẤT CẢ các lời nhắc.", parameters: { type: "object", properties: {} } },
             { name: "getRemindersForDate", description: "Lấy danh sách các lời nhắc cho một ngày cụ thể.", parameters: { type: "object", properties: { "date": { "type": "string", "description": "Ngày cần lấy lời nhắc, định dạng YYYY-MM-DD." } }, required: ["date"] } },
-            // NEW: Declare the new tool for updating reminders
             { name: "updateReminderInFirestore", description: "Cập nhật nội dung của một lời nhắc.", parameters: { type: "object", properties: { "id": { "type": "string" }, "newTitle": { "type": "string" } }, required: ["id", "newTitle"] } },
             { name: "deleteReminderFromFirestore", description: "Xóa một lời nhắc dựa trên ID.", parameters: { type: "object", properties: { "id": { "type": "string" } }, required: ["id"] } },
             { name: "getEventsForCalendar", description: "Lấy tất cả sự kiện, lời nhắc để hiển thị trên lịch.", parameters: { type: "object", properties: {} } }
@@ -380,6 +378,10 @@
             div.appendChild(bubble);
             chatContainer.appendChild(div);
             scrollToBottom();
+            // FIXED: Call createIcons AFTER the content is in the DOM
+            if (typeof lucide !== 'undefined') {
+                lucide.createIcons();
+            }
         }
         function appendTypingIndicator() {
             const div = document.createElement('div');
@@ -457,7 +459,6 @@
                 container.classList.add('prose');
                 container.innerHTML = marked.parse(response.data);
             }
-            if (typeof lucide !== 'undefined') lucide.createIcons();
         }
         function formatTimestamp(date) { return date.toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric' }); }
         
@@ -503,7 +504,6 @@
                 } else { shouldShowLoading = false; }
             }
 
-            // NEW: Handle reminder edit and delete
             const editReminderBtn = event.target.closest('.edit-reminder-btn');
             const deleteReminderBtn = event.target.closest('.delete-reminder-btn');
             if (editReminderBtn) {
