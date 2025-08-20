@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agentic System Demo - Giao diện Chat</title>
+    <!-- TailwindCSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Marked.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <!-- Lucide Icons CDN -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- FullCalendar CDN -->
+    <script src='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.11/index.global.min.js'></script>
+    <style>
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        @keyframes pulse { 0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); } 50% { transform: scale(1.05); box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); } }
+        .spinner { border: 4px solid rgba(255, 255, 255, 0.3); border-left-color: #fff; border-radius: 50%; width: 20px; height: 20px; animation: spin 1s linear infinite; }
+        .hidden { display: none; }
+        .mic-btn.listening { animation: pulse 1.5s infinite; background-color: #fee2e2; color: #ef4444; }
+        
+        /* Chat styles */
+        #chat-container { scroll-behavior: smooth; }
+        .chat-bubble { max-width: 85%; }
+        .chat-bubble-user { background-color: #3b82f6; color: white; }
+        .chat-bubble-ai { background-color: #f3f4f6; color: #1f2937; }
+        .prose { max-width: 100%; }
+        .prose p:first-child { margin-top: 0; }
+        .prose p:last-child { margin-bottom: 0; }
+
+        /* FullCalendar custom styles */
+        :root { --fc-border-color: #e5e7eb; --fc-today-bg-color: #eff6ff; }
+        .fc .fc-button-primary { background-color: #3b82f6; border-color: #3b82f6; }
+        .fc .fc-button-primary:hover { background-color: #2563eb; border-color: #2563eb; }
+        .fc-event { font-size: 0.8rem !important; }
+        .tab-btn { transition: all 0.2s ease-in-out; }
+        .tab-btn.active { border-color: #3b82f6; color: #3b82f6; background-color: #eff6ff; }
+    </style>
+</head>
+<body class="bg-gray-100 flex flex-col items-center h-screen p-2 sm:p-4">
+
+    <!-- Auth Container -->
+    <div id="authContainer" class="w-full max-w-md mx-auto my-auto">
+        <!-- Auth UI will be injected here -->
+    </div>
+
+    <!-- App Container -->
+    <div id="appContainer" class="hidden w-full max-w-3xl h-full flex flex-col bg-white rounded-xl shadow-lg">
+        <header class="p-4 border-b flex justify-between items-center flex-shrink-0">
+            <div>
+                <p class="text-sm text-gray-600">Đã đăng nhập với:</p>
+                <p id="userEmail" class="font-semibold text-gray-800"></p>
+            </div>
+            <button id="logoutButton" class="px-4 py-2 bg-red-500 text-white text-sm font-semibold rounded-lg hover:bg-red-600">Đăng xuất</button>
+        </header>
+
+        <main id="chat-container" class="flex-grow p-4 space-y-4 overflow-y-auto">
+            <!-- Chat messages will be appended here -->
+        </main>
+
+        <footer id="controls" class="p-4 border-t bg-gray-50 rounded-b-xl flex-shrink-0">
+            <div class="relative">
+                <textarea id="promptInput" rows="1" class="w-full p-3 pr-14 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 resize-none" placeholder="Nhập hoặc nói..." disabled></textarea>
+                <button id="micButton" title="Bắt đầu ghi âm" class="mic-btn absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-full text-gray-500 hover:bg-gray-100 hover:text-blue-600 transition-colors" disabled>
+                    <i data-lucide="mic" class="w-5 h-5"></i>
+                </button>
+            </div>
+            <button id="sendPromptButton" class="mt-2 w-full flex justify-center items-center gap-3 px-4 py-3 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 disabled:bg-blue-300" disabled>
+                <span id="buttonText">Gửi</span>
+                <div id="buttonSpinner" class="spinner hidden"></div>
+            </button>
+             <p id="statusMessage" class="mt-2 text-center text-sm h-5"></p>
+        </footer>
+    </div>
+
+    <script type="module">
+        // --- STEP 1 & 2: Firebase and DOM Elements ---
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.9.0/firebase-app.js";
+        import { getAI, getGenerativeModel, GoogleAIBackend } from "https://www.gstatic.com/firebasejs/11.9.0/firebase-ai.js";
+        import { getFirestore, collection, addDoc, getDocs, query, orderBy, doc, deleteDoc, updateDoc, where } from "https://www.gstatic.com/firebasejs/11.9.0/firebase-firestore.js";
+        import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.9.0/firebase-auth.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyAEOby-OTFXDQZTAc8M_b0OUxC1A00FfpE",
+            authDomain: "webauto-5a5ba.firebaseapp.com",
+            projectId: "webauto-5a5ba",
+            storageBucket: "webauto-5a5ba.appspot.com",
+            messagingSenderId: "862713453746",
+            appId: "1:862713453746:web:bebc7edb492ad5cb01fdab"
+        };
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+        
+        const authContainer = document.getElementById('authContainer');
+        authContainer.innerHTML = `<div class="bg-white p-8 rounded-xl shadow-lg"><div id="loginView"><h2 class="text-2xl font-bold text-center text-gray-800 mb-6">Đăng nhập</h2><form id="loginForm" class="space-y-4"><input type="email" id="loginEmail" placeholder="Email" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" required><input type="password" id="loginPassword" placeholder="Mật khẩu" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" required><button type="submit" class="w-full py-3 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700">Đăng nhập</button></form><p class="text-center text-sm text-gray-600 mt-4">Chưa có tài khoản? <a href="#" id="showSignup" class="font-medium text-blue-600 hover:underline">Đăng ký</a></p></div><div id="signupView" class="hidden"><h2 class="text-2xl font-bold text-center text-gray-800 mb-6">Đăng ký</h2><form id="signupForm" class="space-y-4"><input type="email" id="signupEmail" placeholder="Email" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" required><input type="password" id="signupPassword" placeholder="Mật khẩu (ít nhất 6 ký tự)" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" required><button type="submit" class="w-full py-3 bg-green-600 text-white font-semibold rounded-lg shadow-md hover:bg-green-700">Đăng ký</button></form><p class="text-center text-sm text-gray-600 mt-4">Đã có tài khoản? <a href="#" id="showLogin" class="font-medium text-blue-600 hover:underline">Đăng nhập</a></p></div><p id="authError" class="text-red-500 text-sm text-center mt-4 h-4"></p></div>`;
+
+        const appContainer = document.getElementById('appContainer');
+        const userEmail = document.getElementById('userEmail');
+        const chatContainer = document.getElementById('chat-container');
+        const promptInput = document.getElementById('promptInput');
+        const sendPromptButton = document.getElementById('sendPromptButton');
+        const micButton = document.getElementById('micButton');
+        const statusMessage = document.getElementById('statusMessage');
+
+        let model, chat, currentUser, reminderIntervalId;
+
+        // --- STEP 4: Auth State Management ---
+        onAuthStateChanged(auth, async user => {
+            currentUser = user;
+            if (user) {
+                authContainer.classList.add('hidden');
+                appContainer.classList.remove('hidden');
+                userEmail.textContent = user.email;
+                chatContainer.innerHTML = '';
+                
+                await initializeSystems(); 
+                
+                appendAIMessage({ type: 'message', data: `Xin chào **${user.email}**! Tôi có thể giúp gì cho bạn?` });
+            } else {
+                authContainer.classList.remove('hidden');
+                appContainer.classList.add('hidden');
+                chat = null;
+                if (reminderIntervalId) clearInterval(reminderIntervalId);
+            }
+        });
+        
+        async function initializeSystems() {
+            setControlsEnabled(false, 'Đang khởi tạo AI...');
+            try {
+                await initializeAIModel();
+                initializeSpeechRecognition();
+                startReminderChecker();
+                setControlsEnabled(true);
+            } catch (e) {
+                appendAIMessage({ type: 'message', data: `**Lỗi nghiêm trọng khi khởi tạo:** ${e.message}` });
+                setControlsEnabled(false, 'Lỗi khởi tạo');
+            }
+        }
+
+        // --- STEP 5: Agent Functions ---
+        const agentFunctions = {
+          async saveNote(args) {
+            if (!currentUser) return { type: 'message', data: 'Lỗi: Vui lòng đăng nhập.' };
+            const notesCollection = collection(db, 'users', currentUser.uid, 'notes');
+            await addDoc(notesCollection, { text: args.text, createdAt: new Date() });
+            return { type: 'message', data: `✅ Đã lưu ghi chú: "${args.text}"` };
+          },
+          async getAllNotesFromFirestore() {
+            if (!currentUser) return { type: 'message', data: 'Lỗi: Vui lòng đăng nhập.' };
+            const notesCollection = collection(db, 'users', currentUser.uid, 'notes');
+            const q = query(notesCollection, orderBy("createdAt", "desc"));
+            const snapshot = await getDocs(q);
+            const notes = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            if (notes.length === 0) return { type: 'message', data: "🤔 Bạn chưa có ghi chú nào." };
+            return { type: 'notes', data: notes };
+          },
+          async getNotesForDate(args) {
+            if (!currentUser) return { type: 'message', data: 'Lỗi: Vui lòng đăng nhập.' };
+            const targetDate = new Date(args.date);
+            const startDate = new Date(targetDate.setHours(0, 0, 0, 0));
+            const endDate = new Date(targetDate.setHours(23, 59, 59, 999));
+            const notesCollection = collection(db, 'users', currentUser.uid, 'notes');
+            const q = query(notesCollection, where("createdAt", ">=", startDate), where("createdAt", "<=", endDate), orderBy("createdAt", "desc"));
+            const snapshot = await getDocs(q);
+            const notes = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            if (notes.length === 0) return { type: 'message', data: `🤔 Bạn không có ghi chú nào cho ngày ${targetDate.toLocaleDateString('vi-VN')}.` };
+            return { type: 'notes', data: notes };
+          },
+          async deleteNoteFromFirestore(args) {
+             if (!currentUser) return { type: 'message', data: 'Lỗi: Vui lòng đăng nhập.' };
+             const noteRef = doc(db, 'users', currentUser.uid, 'notes', args.id);
+             await deleteDoc(noteRef);
+             return this.getAllNotesFromFirestore();
+          },
+          async updateNoteInFirestore(args) {
+             if (!currentUser) return { type: 'message', data: 'Lỗi: Vui lòng đăng nhập.' };
+             const noteRef = doc(db, 'users', currentUser.uid, 'notes', args.id);
+             await updateDoc(noteRef, { text: args.newText });
+             return this.getAllNotesFromFirestore();
+          },
+          async createReminder(args) {
+            if (!currentUser) return { type: 'message', data: 'Lỗi: Vui lòng đăng nhập.' };
+            const remindersCollection = collection(db, 'users', currentUser.uid, 'reminders');
+            await addDoc(remindersCollection, { 
+                title: args.title, 
+                reminderTime: new Date(args.reminderTime),
+                createdAt: new Date(),
+                triggered: false
+            });
+            return { type: 'message', data: `✅ Đã tạo lời nhắc: "${args.title}"` };
+          },
+          async getAllRemindersFromFirestore() {
+            if (!currentUser) return { type: 'message', data: 'Lỗi: Vui lòng đăng nhập.' };
+            const remindersCollection = collection(db, 'users', currentUser.uid, 'reminders');
+            const q = query(remindersCollection, orderBy("reminderTime", "asc"));
+            const snapshot = await getDocs(q);
+            const reminders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            if (reminders.length === 0) return { type: 'message', data: "🤔 Bạn chưa có lời nhắc nào." };
+            return { type: 'reminders', data: reminders };
+          },
+          async getRemindersForDate(args) {
+            if (!currentUser) return { type: 'message', data: 'Lỗi: Vui lòng đăng nhập.' };
+            const targetDate = new Date(args.date);
+            const startDate = new Date(targetDate.setHours(0, 0, 0, 0));
+            const endDate = new Date(targetDate.setHours(23, 59, 59, 999));
+            const remindersCollection = collection(db, 'users', currentUser.uid, 'reminders');
+            const q = query(remindersCollection, where("reminderTime", ">=", startDate), where("reminderTime", "<=", endDate), orderBy("reminderTime", "asc"));
+            const snapshot = await getDocs(q);
+            const reminders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            if (reminders.length === 0) return { type: 'message', data: `🤔 Bạn không có lời nhắc nào cho ngày ${targetDate.toLocaleDateString('vi-VN')}.` };
+            return { type: 'reminders', data: reminders };
+          },
+          async deleteReminderFromFirestore(args) {
+             if (!currentUser) return { type: 'message', data: 'Lỗi: Vui lòng đăng nhập.' };
+             const reminderRef = doc(db, 'users', currentUser.uid, 'reminders', args.id);
+             await deleteDoc(reminderRef);
+             return this.getAllRemindersFromFirestore();
+          },
+          async getEventsForCalendar() {
+            if (!currentUser) return { type: 'message', data: 'Lỗi: Vui lòng đăng nhập.' };
+            const remindersCollection = collection(db, 'users', currentUser.uid, 'reminders');
+            const q = query(remindersCollection, orderBy("reminderTime", "asc"));
+            const snapshot = await getDocs(q);
+            const events = snapshot.docs.map(doc => {
+                const reminder = doc.data();
+                return { id: doc.id, title: reminder.title, start: reminder.reminderTime.toDate().toISOString(), allDay: false, color: reminder.triggered ? '#a3a3a3' : '#3b82f6' };
+            });
+            return { type: 'calendar', data: events };
+          }
+        };
+        const tools = [{ functionDeclarations: [
+            { name: "saveNote", description: "Lưu một ghi chú.", parameters: { type: "object", properties: { "text": { "type": "string" } }, required: ["text"] } },
+            { name: "getAllNotesFromFirestore", description: "Lấy và hiển thị TẤT CẢ các ghi chú.", parameters: { type: "object", properties: {} } },
+            { name: "getNotesForDate", description: "Lấy danh sách các ghi chú được tạo trong một ngày cụ thể.", parameters: { type: "object", properties: { "date": { "type": "string", "description": "Ngày cần lấy ghi chú, định dạng YYYY-MM-DD." } }, required: ["date"] } },
+            { name: "deleteNoteFromFirestore", description: "Xóa một ghi chú dựa trên ID.", parameters: { type: "object", properties: { "id": { "type": "string" } }, required: ["id"] } },
+            { name: "updateNoteInFirestore", description: "Cập nhật nội dung một ghi chú.", parameters: { type: "object", properties: { "id": { "type": "string" }, "newText": { "type": "string" } }, required: ["id", "newText"] } },
+            { name: "createReminder", description: "Tạo một lịch hẹn hoặc lời nhắc.", parameters: { type: "object", properties: { "title": { "type": "string" }, "reminderTime": { "type": "string", "description": "Thời gian nhắc, định dạng ISO 8601." } }, required: ["title", "reminderTime"] } },
+            { name: "getAllRemindersFromFirestore", description: "Lấy và hiển thị TẤT CẢ các lời nhắc.", parameters: { type: "object", properties: {} } },
+            { name: "getRemindersForDate", description: "Lấy danh sách các lời nhắc cho một ngày cụ thể.", parameters: { type: "object", properties: { "date": { "type": "string", "description": "Ngày cần lấy lời nhắc, định dạng YYYY-MM-DD." } }, required: ["date"] } },
+            { name: "deleteReminderFromFirestore", description: "Xóa một lời nhắc dựa trên ID.", parameters: { type: "object", properties: { "id": { "type": "string" } }, required: ["id"] } },
+            { name: "getEventsForCalendar", description: "Lấy tất cả sự kiện, lời nhắc để hiển thị trên lịch.", parameters: { type: "object", properties: {} } }
+        ] }];
+
+        // --- STEP 6: Initializations (AI, Reminders, Speech) ---
+        async function initializeAIModel() {
+            if (chat) return;
+            const ai = getAI(app, { backend: new GoogleAIBackend() });
+            model = getGenerativeModel(ai, { model: "gemini-2.5-flash" });
+            chat = model.startChat({ tools: tools });
+        }
+        function startReminderChecker() {
+            if ('Notification' in window && Notification.permission !== 'granted') { Notification.requestPermission(); }
+            if (reminderIntervalId) clearInterval(reminderIntervalId);
+            reminderIntervalId = setInterval(async () => {
+                if (!currentUser) return;
+                const remindersCollection = collection(db, 'users', currentUser.uid, 'reminders');
+                const q = query(remindersCollection, where("reminderTime", "<=", new Date()), where("triggered", "==", false));
+                const snapshot = await getDocs(q);
+                snapshot.forEach(docSnapshot => {
+                    const reminder = { id: docSnapshot.id, ...docSnapshot.data() };
+                    if (Notification.permission === 'granted') {
+                        new Notification('Lời nhắc đến hạn!', { body: reminder.title, icon: 'https://img.icons8.com/color/48/appointment-reminders--v1.png' });
+                    }
+                    const reminderRef = doc(db, 'users', currentUser.uid, 'reminders', reminder.id);
+                    updateDoc(reminderRef, { triggered: true });
+                });
+            }, 30000);
+        }
+        function initializeSpeechRecognition() {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!SpeechRecognition) {
+                micButton.disabled = true;
+                micButton.title = "Trình duyệt không hỗ trợ nhận dạng giọng nói";
+                return;
+            }
+            const recognition = new SpeechRecognition();
+            recognition.lang = 'vi-VN';
+            recognition.interimResults = false;
+            micButton.addEventListener('click', () => {
+                micButton.classList.add('listening');
+                micButton.title = "Đang lắng nghe...";
+                statusMessage.textContent = 'Xin mời nói...';
+                recognition.start();
+            });
+            recognition.onresult = (event) => {
+                const transcript = event.results[0][0].transcript;
+                promptInput.value = transcript;
+                setTimeout(() => handlePrompt(), 200);
+            };
+            recognition.onerror = (event) => {
+                statusMessage.textContent = `Lỗi nhận dạng: ${event.error}`;
+            };
+            recognition.onend = () => {
+                micButton.classList.remove('listening');
+                micButton.title = "Bắt đầu ghi âm";
+            };
+        }
+        
+        // --- STEP 7: Main Prompt Handling Logic ---
+        async function handlePrompt() {
+            const promptText = promptInput.value.trim();
+            if (!promptText || !chat) return;
+
+            setControlsEnabled(false);
+            appendUserMessage(promptText);
+            promptInput.value = '';
+            appendTypingIndicator();
+
+            try {
+                const now = new Date();
+                const formattedDate = now.toLocaleString('vi-VN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+                const fullPrompt = `Bối cảnh: Thời gian hiện tại là ${formattedDate}. Dựa vào thông tin này, hãy thực hiện yêu cầu sau của người dùng: "${promptText}"`;
+
+                let result = await chat.sendMessage(fullPrompt);
+                let response = result.response;
+                let functionCalls = response.functionCalls();
+                
+                while (functionCalls && functionCalls.length > 0) {
+                    const functionResponses = [];
+                    let hasRenderedUI = false;
+                    for (const func of functionCalls) {
+                        if (agentFunctions[func.name]) {
+                            const functionResult = await agentFunctions[func.name](func.args);
+                            if (['notes', 'reminders', 'calendar'].includes(functionResult.type)) {
+                                appendAIMessage(functionResult);
+                                hasRenderedUI = true;
+                                break; 
+                            }
+                            functionResponses.push({ functionResponse: { name: func.name, response: functionResult } });
+                        }
+                    }
+                    if (hasRenderedUI) { setControlsEnabled(true); return; }
+                    result = await chat.sendMessage(functionResponses);
+                    response = result.response;
+                    functionCalls = response.functionCalls();
+                }
+                appendAIMessage({ type: 'message', data: response.text() });
+            } catch (error) {
+                appendAIMessage({ type: 'message', data: `**Lỗi:** ${error.message}.` });
+            } finally {
+                setControlsEnabled(true);
+            }
+        }
+
+        // --- STEP 8: Chat UI Helper Functions ---
+        function setControlsEnabled(enabled, status = '') {
+            promptInput.disabled = !enabled;
+            sendPromptButton.disabled = !enabled;
+            micButton.disabled = !enabled;
+            statusMessage.textContent = status;
+        }
+        function scrollToBottom() { chatContainer.scrollTop = chatContainer.scrollHeight; }
+        function escapeHTML(str) {
+            return str ? str.replace(/[&<>"']/g, match => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[match])) : '';
+        }
+        function appendUserMessage(text) {
+            const div = document.createElement('div');
+            div.className = 'flex justify-end';
+            div.innerHTML = `<div class="chat-bubble chat-bubble-user p-3 rounded-lg prose prose-invert max-w-full">${marked.parse(text)}</div>`;
+            chatContainer.appendChild(div);
+            scrollToBottom();
+        }
+        function appendAIMessage(response) {
+            removeTypingIndicator();
+            const div = document.createElement('div');
+            div.className = 'flex justify-start';
+            const bubble = document.createElement('div');
+            bubble.className = 'chat-bubble chat-bubble-ai p-3 rounded-lg';
+            renderResponseContent(bubble, response);
+            div.appendChild(bubble);
+            chatContainer.appendChild(div);
+            scrollToBottom();
+        }
+        function appendTypingIndicator() {
+            const div = document.createElement('div');
+            div.id = 'typing-indicator';
+            div.className = 'flex justify-start';
+            div.innerHTML = `<div class="chat-bubble chat-bubble-ai p-3 rounded-lg flex items-center gap-2"><div class="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style="animation-delay:-0.3s;"></div><div class="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style="animation-delay:-0.15s;"></div><div class="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div></div>`;
+            chatContainer.appendChild(div);
+            scrollToBottom();
+        }
+        function removeTypingIndicator() {
+            const indicator = document.getElementById('typing-indicator');
+            if (indicator) indicator.remove();
+        }
+        function createNoteCard(note) {
+            const card = document.createElement('div');
+            card.className = 'bg-gray-50 p-4 rounded-lg border border-gray-200 flex justify-between items-start gap-4';
+            card.innerHTML = `
+                <div class="flex-grow">
+                    <p class="text-gray-800">${note.text}</p>
+                    <p class="text-xs text-gray-500 mt-2">Tạo lúc: ${formatTimestamp(note.createdAt.toDate())}</p>
+                </div>
+                <div class="flex-shrink-0 flex items-center gap-2">
+                    <button data-note-id="${note.id}" data-note-text="${escapeHTML(note.text)}" title="Sửa ghi chú" class="edit-btn p-2 text-blue-500 hover:text-blue-700 hover:bg-blue-100 rounded-full"><i data-lucide="file-pen-line" class="w-4 h-4 pointer-events-none"></i></button>
+                    <button data-note-id="${note.id}" title="Xóa ghi chú" class="delete-btn p-2 text-red-500 hover:text-red-700 hover:bg-red-100 rounded-full"><i data-lucide="trash-2" class="w-4 h-4 pointer-events-none"></i></button>
+                </div>`;
+            return card;
+        }
+        function createReminderCard(reminder) {
+            const card = document.createElement('div');
+            const isTriggered = reminder.triggered;
+            card.className = `bg-yellow-50 p-4 rounded-lg border border-yellow-200 flex justify-between items-start gap-4 ${isTriggered ? 'opacity-50' : ''}`;
+            card.innerHTML = `
+                <div class="flex-grow">
+                    <p class="text-gray-800 font-medium ${isTriggered ? 'line-through' : ''}">${reminder.title}</p>
+                    <p class="text-sm text-yellow-800 mt-1 flex items-center gap-2">
+                        <i data-lucide="bell" class="w-4 h-4"></i>
+                        <span>${formatTimestamp(reminder.reminderTime.toDate())}</span>
+                    </p>
+                </div>
+                <div class="flex-shrink-0 flex items-center">
+                    <button data-reminder-id="${reminder.id}" title="Xóa lời nhắc" class="delete-reminder-btn p-2 text-red-500 hover:text-red-700 hover:bg-red-100 rounded-full"><i data-lucide="trash-2" class="w-4 h-4 pointer-events-none"></i></button>
+                </div>`;
+            return card;
+        }
+        function renderResponseContent(container, response) {
+            if (['notes', 'reminders', 'calendar'].includes(response.type)) {
+                const activeTab = response.type;
+                container.innerHTML = `
+                    <div class="border-b border-gray-200 mb-4">
+                        <nav class="-mb-px flex space-x-6" aria-label="Tabs">
+                            <button data-type="notes" class="tab-btn whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm ${activeTab === 'notes' ? 'active' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}">Ghi chú</button>
+                            <button data-type="reminders" class="tab-btn whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm ${activeTab === 'reminders' ? 'active' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}">Lời nhắc</button>
+                            <button data-type="calendar" class="tab-btn whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm ${activeTab === 'calendar' ? 'active' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}">Lịch</button>
+                        </nav>
+                    </div>
+                    <div class="content-area"></div>`;
+                const contentArea = container.querySelector('.content-area');
+                if (activeTab === 'calendar') {
+                    const calDiv = document.createElement('div');
+                    contentArea.appendChild(calDiv);
+                    const calendar = new FullCalendar.Calendar(calDiv, { initialView: 'dayGridMonth', locale: 'vi', headerToolbar: { left: 'prev,next today', center: 'title', right: 'dayGridMonth,timeGridWeek,listWeek' }, events: response.data, height: 'auto' });
+                    setTimeout(() => calendar.render(), 0);
+                } else {
+                    contentArea.classList.add('space-y-3');
+                    if (activeTab === 'notes') {
+                        if(response.data.length > 0) response.data.forEach(note => contentArea.appendChild(createNoteCard(note)));
+                        else contentArea.innerHTML = `<p class="text-gray-500 text-center">Không có ghi chú nào.</p>`;
+                    } else {
+                        if(response.data.length > 0) response.data.forEach(reminder => contentArea.appendChild(createReminderCard(reminder)));
+                        else contentArea.innerHTML = `<p class="text-gray-500 text-center">Không có lời nhắc nào.</p>`;
+                    }
+                }
+            } else {
+                container.classList.add('prose');
+                container.innerHTML = marked.parse(response.data);
+            }
+            if (typeof lucide !== 'undefined') lucide.createIcons();
+        }
+        function formatTimestamp(date) { return date.toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric' }); }
+        
+        // --- STEP 9: Event Listeners ---
+        document.getElementById('showSignup').addEventListener('click', (e) => { e.preventDefault(); document.getElementById('loginView').classList.add('hidden'); document.getElementById('signupView').classList.remove('hidden'); });
+        document.getElementById('showLogin').addEventListener('click', (e) => { e.preventDefault(); document.getElementById('signupView').classList.add('hidden'); document.getElementById('loginView').classList.remove('hidden'); });
+        document.getElementById('loginForm').addEventListener('submit', async (e) => { e.preventDefault(); try { await signInWithEmailAndPassword(auth, document.getElementById('loginEmail').value, document.getElementById('loginPassword').value); document.getElementById('authError').textContent = ''; } catch (error) { document.getElementById('authError').textContent = 'Email hoặc mật khẩu không đúng.'; } });
+        document.getElementById('signupForm').addEventListener('submit', async (e) => { e.preventDefault(); try { await createUserWithEmailAndPassword(auth, document.getElementById('signupEmail').value, document.getElementById('signupPassword').value); document.getElementById('authError').textContent = ''; } catch (error) { document.getElementById('authError').textContent = 'Đăng ký thất bại. Email có thể đã tồn tại.'; } });
+        document.getElementById('logoutButton').addEventListener('click', () => signOut(auth));
+        
+        sendPromptButton.addEventListener("click", handlePrompt);
+        promptInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                handlePrompt();
+            }
+        });
+        
+        chatContainer.addEventListener('click', async function(event) {
+            const tabBtn = event.target.closest('.tab-btn');
+            if (tabBtn) {
+                const type = tabBtn.dataset.type;
+                if (type === 'notes') promptInput.value = 'hiển thị tất cả ghi chú';
+                else if (type === 'reminders') promptInput.value = 'hiển thị tất cả lời nhắc';
+                else if (type === 'calendar') promptInput.value = 'hiển thị lịch';
+                handlePrompt();
+                return;
+            }
+
+            let result;
+            let shouldShowLoading = true;
+            
+            const editBtn = event.target.closest('.edit-btn');
+            const deleteBtn = event.target.closest('.delete-btn');
+            if (editBtn) {
+                const newText = prompt("Nhập nội dung mới:", editBtn.dataset.noteText);
+                if (newText && newText.trim() !== editBtn.dataset.noteText.trim()) {
+                    result = await agentFunctions.updateNoteInFirestore({ id: editBtn.dataset.noteId, newText: newText.trim() });
+                } else { shouldShowLoading = false; }
+            } else if (deleteBtn) {
+                if (confirm('Bạn có chắc chắn muốn xóa ghi chú này?')) {
+                    result = await agentFunctions.deleteNoteFromFirestore({ id: deleteBtn.dataset.noteId });
+                } else { shouldShowLoading = false; }
+            }
+
+            const deleteReminderBtn = event.target.closest('.delete-reminder-btn');
+            if (deleteReminderBtn) {
+                 if (confirm('Bạn có chắc chắn muốn xóa lời nhắc này?')) {
+                    result = await agentFunctions.deleteReminderFromFirestore({ id: deleteReminderBtn.dataset.reminderId });
+                } else { shouldShowLoading = false; }
+            }
+
+            if(shouldShowLoading) {
+                setControlsEnabled(false);
+                appendTypingIndicator();
+            }
+
+            if (result) {
+                appendAIMessage(result);
+            }
+            
+            if (shouldShowLoading) {
+                setControlsEnabled(true);
+            }
+        });
+
+    </script>
+</body>
+</html>
