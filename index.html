@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Agentic System Demo - Tìm kiếm chính xác</title>
+    <title>Agentic System Demo - Trợ lý Đọc hiểu</title>
     <!-- TailwindCSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Marked.js CDN -->
@@ -63,11 +63,17 @@
 
         <footer id="controls" class="p-4 border-t bg-gray-50 rounded-b-xl flex-shrink-0">
             <div class="relative">
-                <textarea id="promptInput" rows="1" class="w-full p-3 pr-14 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 resize-none" placeholder="Thử: 'tìm ghi chú về dự án Alpha'" disabled></textarea>
+                <textarea id="promptInput" rows="1" class="w-full p-3 pr-14 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 resize-none" placeholder="Thử: 'việc nào quan trọng nhất?'" disabled></textarea>
                 <button id="micButton" title="Bắt đầu ghi âm" class="mic-btn absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-full text-gray-500 hover:bg-gray-100 hover:text-blue-600 transition-colors" disabled>
                     <i data-lucide="mic" class="w-5 h-5"></i>
                 </button>
             </div>
+            
+            <div id="quickActions" class="mt-2 flex items-center justify-center gap-2">
+                <button id="quickActionAllNotes" class="px-3 py-1 bg-gray-200 text-gray-700 text-sm rounded-full hover:bg-gray-300 transition-colors">Tất cả ghi chú</button>
+                <button id="quickActionAllReminders" class="px-3 py-1 bg-gray-200 text-gray-700 text-sm rounded-full hover:bg-gray-300 transition-colors">Tất cả lời nhắc</button>
+            </div>
+
             <button id="sendPromptButton" class="mt-2 w-full flex justify-center items-center gap-3 px-4 py-3 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 disabled:bg-blue-300" disabled>
                 <span id="buttonText">Gửi</span>
                 <div id="buttonSpinner" class="spinner hidden"></div>
@@ -91,7 +97,7 @@
 
 
     <script type="module">
-        // --- STEP 1 & 2: Firebase and DOM Elements ---
+        // --- Firebase and DOM Elements ---
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.9.0/firebase-app.js";
         import { getAI, getGenerativeModel, GoogleAIBackend } from "https://www.gstatic.com/firebasejs/11.9.0/firebase-ai.js";
         import { getFirestore, collection, addDoc, getDocs, query, orderBy, doc, deleteDoc, updateDoc, where } from "https://www.gstatic.com/firebasejs/11.9.0/firebase-firestore.js";
@@ -127,7 +133,25 @@
 
         let model, chat, currentUser, reminderIntervalId;
 
-        // --- STEP 4: Auth State Management ---
+        // --- AI Keyword Expansion Helper ---
+        async function generateKeywordsWithAI(text) {
+            if (!model) return text.toLowerCase().split(' ').filter(Boolean);
+            try {
+                const prompt = `Với câu sau: "${text}", hãy liệt kê các từ khóa, từ đồng nghĩa và khái niệm liên quan để tìm kiếm sau này. Chỉ trả về danh sách các từ, viết thường, ngăn cách bởi dấu phẩy, không giải thích gì thêm.`;
+                const result = await model.generateContent(prompt);
+                const response = result.response;
+                const keywordsText = response.text();
+                const baseKeywords = text.toLowerCase().split(' ').filter(Boolean);
+                const aiKeywords = keywordsText.split(',').map(k => k.trim()).filter(Boolean);
+                const allKeywords = new Set([...baseKeywords, ...aiKeywords]);
+                return Array.from(allKeywords);
+            } catch (error) {
+                console.error("Lỗi khi tạo từ khóa bằng AI:", error);
+                return text.toLowerCase().split(' ').filter(Boolean);
+            }
+        }
+
+        // --- Auth State Management ---
         onAuthStateChanged(auth, async user => {
             currentUser = user;
             if (user) {
@@ -135,9 +159,7 @@
                 appContainer.classList.remove('hidden');
                 userEmail.textContent = user.email;
                 chatContainer.innerHTML = '';
-                
                 await initializeSystems(); 
-                
                 appendAIMessage({ type: 'message', data: `Xin chào **${user.email}**! Tôi có thể giúp gì cho bạn?` });
             } else {
                 authContainer.classList.remove('hidden');
@@ -160,13 +182,13 @@
             }
         }
 
-        // --- STEP 5: Agent Functions ---
+        // --- Agent Functions ---
         const agentFunctions = {
           async saveNote(args) {
             if (!currentUser) return { type: 'message', data: 'Lỗi: Vui lòng đăng nhập.' };
             const notesCollection = collection(db, 'users', currentUser.uid, 'notes');
             const text = args.text || '';
-            const keywords = text.toLowerCase().split(' ').filter(Boolean);
+            const keywords = await generateKeywordsWithAI(text);
             await addDoc(notesCollection, { 
                 text: text, 
                 createdAt: new Date(),
@@ -187,36 +209,38 @@
           },
           async searchNotes(args) {
             if (!currentUser) return { type: 'message', data: 'Lỗi: Vui lòng đăng nhập.' };
-            const { query: searchQuery, startDate, endDate } = args;
-            if (!searchQuery && !startDate && !endDate) return this.getAllNotesFromFirestore();
+            const { query: searchQuery, startDate, endDate, priority } = args;
+            if (!searchQuery && !startDate && !endDate && !priority) return this.getAllNotesFromFirestore();
             
             const notesCollection = collection(db, 'users', currentUser.uid, 'notes');
             let q;
-
+            
             if (startDate && endDate) {
                 q = query(notesCollection, 
                     where("createdAt", ">=", new Date(startDate)), 
                     where("createdAt", "<=", new Date(endDate)), 
                     orderBy("createdAt", "desc"));
             } else {
-                q = query(notesCollection, orderBy("createdAt", "desc"));
+                 q = query(notesCollection, orderBy("createdAt", "desc"));
             }
 
             const snapshot = await getDocs(q);
-            let notesInRange = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            let finalNotes = notesInRange;
+            let results = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
+            if (priority) {
+                results = results.filter(note => (note.priority || 'medium') === priority);
+            }
             if (searchQuery) {
                 const searchTerms = searchQuery.toLowerCase().split(' ').filter(Boolean);
-                finalNotes = notesInRange.filter(note => 
+                results = results.filter(note => 
                     searchTerms.every(term => (note.keywords || []).includes(term))
                 );
             }
 
-            if (finalNotes.length === 0) return { type: 'message', data: `🤔 Tôi không tìm thấy ghi chú nào phù hợp.` };
+            if (results.length === 0) return { type: 'message', data: `🤔 Tôi không tìm thấy ghi chú nào phù hợp.` };
             
-            finalNotes = sortWithPriority(finalNotes);
-            return { type: 'notes', data: finalNotes };
+            results = sortWithPriority(results);
+            return { type: 'notes', data: results };
           },
           async deleteNoteFromFirestore(args) {
              if (!currentUser) return { type: 'message', data: 'Lỗi: Vui lòng đăng nhập.' };
@@ -230,7 +254,7 @@
              const updateData = {};
              if (args.newText) {
                 updateData.text = args.newText;
-                updateData.keywords = args.newText.toLowerCase().split(' ').filter(Boolean);
+                updateData.keywords = await generateKeywordsWithAI(args.newText);
              }
              if (args.newPriority) updateData.priority = args.newPriority;
              await updateDoc(noteRef, updateData);
@@ -240,7 +264,7 @@
             if (!currentUser) return { type: 'message', data: 'Lỗi: Vui lòng đăng nhập.' };
             const remindersCollection = collection(db, 'users', currentUser.uid, 'reminders');
             const title = args.title || '';
-            const keywords = title.toLowerCase().split(' ').filter(Boolean);
+            const keywords = await generateKeywordsWithAI(title);
             await addDoc(remindersCollection, { 
                 title: title, 
                 reminderTime: new Date(args.reminderTime),
@@ -263,9 +287,9 @@
           },
           async searchReminders(args) {
             if (!currentUser) return { type: 'message', data: 'Lỗi: Vui lòng đăng nhập.' };
-            const { query: searchQuery, startDate, endDate } = args;
+            const { query: searchQuery, startDate, endDate, priority } = args;
 
-            if (!searchQuery && !startDate && !endDate) return this.getAllRemindersFromFirestore();
+            if (!searchQuery && !startDate && !endDate && !priority) return this.getAllRemindersFromFirestore();
 
             const remindersCollection = collection(db, 'users', currentUser.uid, 'reminders');
             let q;
@@ -280,20 +304,22 @@
             }
 
             const snapshot = await getDocs(q);
-            let remindersInRange = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            let finalReminders = remindersInRange;
+            let results = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
+            if (priority) {
+                results = results.filter(reminder => (reminder.priority || 'medium') === priority);
+            }
             if (searchQuery) {
                 const searchTerms = searchQuery.toLowerCase().split(' ').filter(Boolean);
-                finalReminders = remindersInRange.filter(reminder =>
+                results = results.filter(reminder =>
                     searchTerms.every(term => (reminder.keywords || []).includes(term))
                 );
             }
 
-            if (finalReminders.length === 0) return { type: 'message', data: `🤔 Tôi không tìm thấy lời nhắc nào phù hợp.` };
+            if (results.length === 0) return { type: 'message', data: `🤔 Tôi không tìm thấy lời nhắc nào phù hợp.` };
             
-            finalReminders = sortWithPriority(finalReminders);
-            return { type: 'reminders', data: finalReminders };
+            results = sortWithPriority(results);
+            return { type: 'reminders', data: results };
           },
           async updateReminderInFirestore(args) {
              if (!currentUser) return { type: 'message', data: 'Lỗi: Vui lòng đăng nhập.' };
@@ -301,7 +327,7 @@
              const updateData = {};
              if (args.newTitle) {
                 updateData.title = args.newTitle;
-                updateData.keywords = args.newTitle.toLowerCase().split(' ').filter(Boolean);
+                updateData.keywords = await generateKeywordsWithAI(args.newTitle);
              }
              if (args.newTime) updateData.reminderTime = new Date(args.newTime);
              if (args.newPriority) updateData.priority = args.newPriority;
@@ -330,24 +356,24 @@
           }
         };
         const tools = [{ functionDeclarations: [
-            { name: "saveNote", description: "Lưu một ghi chú cá nhân cho người dùng.", parameters: { type: "object", properties: { "text": { "type": "string" }, "priority": { "type": "string", "description": "Mức độ ưu tiên: 'high', 'medium', 'low'." } }, required: ["text"] } },
+            { name: "saveNote", description: "Lưu một ghi chú cá nhân cho người dùng.", parameters: { type: "object", properties: { "text": { "type": "string" }, "priority": { "type": "string", "enum": ["high", "medium", "low"], "description": "Mức độ ưu tiên." } }, required: ["text"] } },
             { name: "getAllNotesFromFirestore", description: "Lấy và hiển thị TẤT CẢ các ghi chú cá nhân của người dùng.", parameters: { type: "object", properties: {} } },
-            { name: "searchNotes", description: "Tìm kiếm trong các ghi chú cá nhân của người dùng dựa trên nội dung và/hoặc khoảng thời gian. Chỉ sử dụng để truy xuất thông tin người dùng đã lưu.", parameters: { type: "object", properties: { "query": { "type": "string", "description": "Nội dung hoặc các từ khóa cần tìm." }, "startDate": { "type": "string", "description": "Ngày bắt đầu để tìm kiếm (ngày tạo ghi chú), định dạng ISO 8601." }, "endDate": { "type": "string", "description": "Ngày kết thúc để tìm kiếm (ngày tạo ghi chú), định dạng ISO 8601." } } } },
+            { name: "searchNotes", description: "Tìm kiếm và lấy thông tin từ ghi chú cá nhân của người dùng. Đây là công cụ chính để trả lời các câu hỏi về ghi chú đã lưu. Nếu người dùng chỉ hỏi về thời gian/độ ưu tiên mà không có chủ đề cụ thể, hãy bỏ trống tham số 'query'.", parameters: { type: "object", properties: { "query": { "type": "string", "description": "Chủ đề hoặc nội dung chính cần tìm trong ghi chú." }, "startDate": { "type": "string", "description": "Ngày bắt đầu để tìm kiếm (ngày tạo ghi chú), định dạng ISO 8601." }, "endDate": { "type": "string", "description": "Ngày kết thúc để tìm kiếm (ngày tạo ghi chú), định dạng ISO 8601." }, "priority": { "type": "string", "enum": ["high", "medium", "low"], "description": "Lọc theo mức độ ưu tiên." } } } },
             { name: "deleteNoteFromFirestore", description: "Xóa một ghi chú cá nhân của người dùng dựa trên ID.", parameters: { type: "object", properties: { "id": { "type": "string" } }, required: ["id"] } },
-            { name: "updateNoteInFirestore", description: "Cập nhật nội dung và/hoặc độ ưu tiên của một ghi chú cá nhân của người dùng.", parameters: { type: "object", properties: { "id": { "type": "string" }, "newText": { "type": "string" }, "newPriority": { "type": "string" } }, required: ["id"] } },
-            { name: "createReminder", description: "Tạo một lịch hẹn hoặc lời nhắc cá nhân cho người dùng.", parameters: { type: "object", properties: { "title": { "type": "string" }, "reminderTime": { "type": "string", "description": "Thời gian nhắc, định dạng ISO 8601." }, "priority": { "type": "string", "description": "Mức độ ưu tiên: 'high', 'medium', 'low'." } }, required: ["title", "reminderTime"] } },
+            { name: "updateNoteInFirestore", description: "Cập nhật nội dung và/hoặc độ ưu tiên của một ghi chú cá nhân của người dùng.", parameters: { type: "object", properties: { "id": { "type": "string" }, "newText": { "type": "string" }, "newPriority": { "type": "string", "enum": ["high", "medium", "low"] } }, required: ["id"] } },
+            { name: "createReminder", description: "Tạo một lịch hẹn hoặc lời nhắc cá nhân cho người dùng.", parameters: { type: "object", properties: { "title": { "type": "string" }, "reminderTime": { "type": "string", "description": "Thời gian nhắc, định dạng ISO 8601." }, "priority": { "type": "string", "enum": ["high", "medium", "low"], "description": "Mức độ ưu tiên." } }, required: ["title", "reminderTime"] } },
             { name: "getAllRemindersFromFirestore", description: "Lấy và hiển thị TẤT CẢ các lời nhắc cá nhân của người dùng.", parameters: { type: "object", properties: {} } },
-            { name: "searchReminders", description: "Tìm kiếm trong lời nhắc cá nhân của người dùng về các sự kiện, lịch hẹn dựa trên nội dung và/hoặc khoảng thời gian. Chỉ sử dụng để truy xuất thông tin người dùng đã lưu, không dùng để tìm kiếm thông tin chung trên internet.", parameters: { type: "object", properties: { "query": { "type": "string", "description": "Nội dung hoặc các từ khóa cần tìm trong lời nhắc." }, "startDate": { "type": "string", "description": "Ngày bắt đầu để tìm kiếm (ngày hẹn), định dạng ISO 8601." }, "endDate": { "type": "string", "description": "Ngày kết thúc để tìm kiếm (ngày hẹn), định dạng ISO 8601." } } } },
-            { name: "updateReminderInFirestore", description: "Cập nhật nội dung, thời gian và/hoặc độ ưu tiên của một lời nhắc cá nhân của người dùng.", parameters: { type: "object", properties: { "id": { "type": "string" }, "newTitle": { "type": "string" }, "newTime": { "type": "string", "description": "Thời gian mới, định dạng ISO 8601."}, "newPriority": { "type": "string" } }, required: ["id"] } },
+            { name: "searchReminders", description: "Tìm kiếm và lấy thông tin từ lời nhắc cá nhân của người dùng. Đây là công cụ chính để trả lời các câu hỏi về lời nhắc đã lưu (ví dụ: 'mấy giờ bay?'). Nếu người dùng chỉ hỏi về thời gian/độ ưu tiên mà không có chủ đề cụ thể, hãy bỏ trống tham số 'query'.", parameters: { type: "object", properties: { "query": { "type": "string", "description": "Chủ đề hoặc nội dung chính cần tìm trong lời nhắc." }, "startDate": { "type": "string", "description": "Ngày bắt đầu để tìm kiếm (ngày hẹn), định dạng ISO 8601." }, "endDate": { "type": "string", "description": "Ngày kết thúc để tìm kiếm (ngày hẹn), định dạng ISO 8601." }, "priority": { "type": "string", "enum": ["high", "medium", "low"], "description": "Lọc theo mức độ ưu tiên." } } } },
+            { name: "updateReminderInFirestore", description: "Cập nhật nội dung, thời gian và/hoặc độ ưu tiên của một lời nhắc cá nhân của người dùng.", parameters: { type: "object", properties: { "id": { "type": "string" }, "newTitle": { "type": "string" }, "newTime": { "type": "string", "description": "Thời gian mới, định dạng ISO 8601."}, "newPriority": { "type": "string", "enum": ["high", "medium", "low"] } }, required: ["id"] } },
             { name: "deleteReminderFromFirestore", description: "Xóa một lời nhắc cá nhân của người dùng dựa trên ID.", parameters: { type: "object", properties: { "id": { "type": "string" } }, required: ["id"] } },
             { name: "getEventsForCalendar", description: "Lấy tất cả sự kiện, lời nhắc cá nhân của người dùng để hiển thị trên lịch.", parameters: { type: "object", properties: {} } }
         ] }];
 
-        // --- STEP 6: Initializations (AI, Reminders, Speech) ---
+        // --- Initializations (AI, Reminders, Speech) ---
         async function initializeAIModel() {
             if (chat) return;
             const ai = getAI(app, { backend: new GoogleAIBackend() });
-            model = getGenerativeModel(ai, { model: "gemini-2.5-flash" });
+            model = getGenerativeModel(ai, { model: "gemini-2.0-flash" });
             chat = model.startChat({ tools: tools });
         }
         function startReminderChecker() {
@@ -398,7 +424,7 @@
             };
         }
         
-        // --- STEP 7: Main Prompt Handling Logic ---
+        // --- Main Prompt Handling Logic ---
         async function handlePrompt() {
             const promptText = promptInput.value.trim();
             if (!promptText || !chat) return;
@@ -417,40 +443,62 @@
                 let response = result.response;
                 let functionCalls = response.functionCalls();
                 
-                while (functionCalls && functionCalls.length > 0) {
-                    const functionResponses = [];
-                    let hasRenderedSomething = false;
+                const isQuestion = ['mấy giờ', 'khi nào', 'ở đâu', 'cái gì', 'ai', 'tại sao', 'quan trọng', 'ưu tiên'].some(q => promptText.toLowerCase().includes(q));
+                if (isQuestion && functionCalls && functionCalls.length === 1 && functionCalls[0].name.startsWith('search')) {
+                    const func = functionCalls[0];
+                    const functionResult = await agentFunctions[func.name](func.args);
 
-                    for (const func of functionCalls) {
-                        if (agentFunctions[func.name]) {
-                            const functionResult = await agentFunctions[func.name](func.args);
-                            
-                            if (['notes', 'reminders', 'calendar'].includes(functionResult.type)) {
-                                appendAIMessage(functionResult);
-                                hasRenderedSomething = true;
-                            } else {
+                    removeTypingIndicator();
+
+                    if (functionResult.type === 'message') {
+                        appendAIMessage(functionResult);
+                    } else {
+                        const context = functionResult.data.map(item => {
+                            const content = item.text || item.title;
+                            const time = item.reminderTime ? `Thời gian nhắc: ${item.reminderTime.toDate().toLocaleString('vi-VN')}` : `Tạo lúc: ${item.createdAt.toDate().toLocaleString('vi-VN')}`;
+                            const priority = `Mức độ ưu tiên: ${item.priority || 'trung bình'}`;
+                            return `- Nội dung: "${content}", ${time}, ${priority}`;
+                        }).join('\n');
+
+                        const summarizationPrompt = `Dựa vào thông tin sau:\n${context}\n\nHãy trả lời câu hỏi ban đầu của người dùng một cách tự nhiên và trực tiếp: "${promptText}"`;
+                        
+                        appendTypingIndicator();
+                        const summaryResult = await model.generateContent(summarizationPrompt);
+                        const summaryResponse = summaryResult.response;
+                        removeTypingIndicator();
+                        
+                        appendAIMessage({ type: 'message', data: summaryResponse.text() });
+                        appendAIMessage(functionResult);
+                    }
+                } else {
+                    while (functionCalls && functionCalls.length > 0) {
+                        const functionResponses = [];
+                        let hasRenderedSomething = false;
+
+                        for (const func of functionCalls) {
+                            if (agentFunctions[func.name]) {
+                                const functionResult = await agentFunctions[func.name](func.args);
+                                if (['notes', 'reminders', 'calendar'].includes(functionResult.type)) {
+                                    appendAIMessage(functionResult);
+                                    hasRenderedSomething = true;
+                                }
                                 functionResponses.push({ functionResponse: { name: func.name, response: functionResult } });
                             }
                         }
+                        
+                        if (hasRenderedSomething) {
+                             functionCalls = null;
+                        } else {
+                            result = await chat.sendMessage(functionResponses);
+                            response = result.response;
+                            functionCalls = response.functionCalls();
+                        }
                     }
-
-                    if (hasRenderedSomething) {
-                        setControlsEnabled(true);
-                        removeTypingIndicator(); // Remove typing indicator if we already rendered something
-                        return;
-                    }
-                    
-                    if (functionResponses.length > 0) {
-                        result = await chat.sendMessage(functionResponses);
-                        response = result.response;
-                        functionCalls = response.functionCalls();
-                    } else {
-                        functionCalls = null; // No more calls to process
+                    removeTypingIndicator();
+                    if(response.text()) {
+                         appendAIMessage({ type: 'message', data: response.text() });
                     }
                 }
-
-                removeTypingIndicator();
-                appendAIMessage({ type: 'message', data: response.text() });
 
             } catch (error) {
                 appendAIMessage({ type: 'message', data: `**Lỗi:** ${error.message}.` });
@@ -459,7 +507,7 @@
             }
         }
 
-        // --- STEP 8: Chat UI and Modal Helper Functions ---
+        // --- Chat UI and Modal Helper Functions ---
         function setControlsEnabled(enabled, status = '') {
             promptInput.disabled = !enabled;
             sendPromptButton.disabled = !enabled;
@@ -492,7 +540,7 @@
             }
         }
         function appendTypingIndicator() {
-            if (document.getElementById('typing-indicator')) return; // Prevent multiple indicators
+            if (document.getElementById('typing-indicator')) return;
             const div = document.createElement('div');
             div.id = 'typing-indicator';
             div.className = 'flex justify-start';
@@ -604,7 +652,7 @@
             }, 200);
         }
 
-        // --- STEP 9: Event Listeners ---
+        // --- Event Listeners ---
         document.getElementById('showSignup').addEventListener('click', (e) => { e.preventDefault(); document.getElementById('loginView').classList.add('hidden'); document.getElementById('signupView').classList.remove('hidden'); });
         document.getElementById('showLogin').addEventListener('click', (e) => { e.preventDefault(); document.getElementById('signupView').classList.add('hidden'); document.getElementById('loginView').classList.remove('hidden'); });
         document.getElementById('loginForm').addEventListener('submit', async (e) => { e.preventDefault(); try { await signInWithEmailAndPassword(auth, document.getElementById('loginEmail').value, document.getElementById('loginPassword').value); document.getElementById('authError').textContent = ''; } catch (error) { document.getElementById('authError').textContent = 'Email hoặc mật khẩu không đúng.'; } });
@@ -619,6 +667,16 @@
             }
         });
         
+        document.getElementById('quickActionAllNotes').addEventListener('click', () => {
+            promptInput.value = 'hiển thị tất cả ghi chú';
+            handlePrompt();
+        });
+
+        document.getElementById('quickActionAllReminders').addEventListener('click', () => {
+            promptInput.value = 'hiển thị tất cả lời nhắc';
+            handlePrompt();
+        });
+
         chatContainer.addEventListener('click', async function(event) {
             const tabBtn = event.target.closest('.tab-btn');
             if (tabBtn) {
