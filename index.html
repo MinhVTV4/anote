@@ -120,19 +120,19 @@
 
     <script type="module">
         // --- Firebase and DOM Elements ---
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.9.0/firebase-app.js";
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-app.js";
         import { getAI, getGenerativeModel, GoogleAIBackend } from "https://www.gstatic.com/firebasejs/11.9.0/firebase-ai.js";
         import { getFirestore, collection, addDoc, getDocs, query, orderBy, doc, deleteDoc, updateDoc, where, writeBatch, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.9.0/firebase-firestore.js";
         import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.9.0/firebase-auth.js";
 
-        const firebaseConfig = {
-            apiKey: "AIzaSyAEOby-OTFXDQZTAc8M_b0OUxC1A00FfpE",
-            authDomain: "webauto-5a5ba.firebaseapp.com",
-            projectId: "webauto-5a5ba",
-            storageBucket: "webauto-5a5ba.appspot.com",
-            messagingSenderId: "862713453746",
-            appId: "1:862713453746:web:bebc7edb492ad5cb01fdab"
-        };
+         const firebaseConfig = {
+    apiKey: "AIzaSyDaYn6FHqbP5lGBmY8V3mq_IGY44l-9OZs",
+    authDomain: "anote-14064.firebaseapp.com",
+    projectId: "anote-14064",
+    storageBucket: "anote-14064.firebasestorage.app",
+    messagingSenderId: "328653283381",
+    appId: "1:328653283381:web:c233d5f0292c6c75c6517c"
+  };
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
         const auth = getAuth(app);
