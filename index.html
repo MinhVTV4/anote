@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Agentic System Demo - Trợ lý Đọc hiểu</title>
+    <title>Agentic System Demo - Trợ lý Chủ động</title>
     <!-- TailwindCSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Marked.js CDN -->
@@ -132,6 +132,7 @@
         const modalActions = document.getElementById('modalActions');
 
         let model, chat, currentUser, reminderIntervalId;
+        let conversationContext = null;
 
         // --- AI Keyword Expansion Helper ---
         async function generateKeywordsWithAI(text) {
@@ -160,11 +161,11 @@
                 userEmail.textContent = user.email;
                 chatContainer.innerHTML = '';
                 await initializeSystems(); 
-                appendAIMessage({ type: 'message', data: `Xin chào **${user.email}**! Tôi có thể giúp gì cho bạn?` });
             } else {
                 authContainer.classList.remove('hidden');
                 appContainer.classList.add('hidden');
                 chat = null;
+                conversationContext = null;
                 if (reminderIntervalId) clearInterval(reminderIntervalId);
             }
         });
@@ -175,6 +176,7 @@
                 await initializeAIModel();
                 initializeSpeechRecognition();
                 startReminderChecker();
+                await triggerDailySummary(); // Trigger proactive summary
                 setControlsEnabled(true);
             } catch (e) {
                 appendAIMessage({ type: 'message', data: `**Lỗi nghiêm trọng khi khởi tạo:** ${e.message}` });
@@ -353,6 +355,25 @@
                 return { id: doc.id, title: reminder.title, start: reminder.reminderTime.toDate().toISOString(), allDay: false, color: reminder.triggered ? '#a3a3a3' : (priorityColors[reminder.priority] || '#3b82f6') };
             });
             return { type: 'calendar', data: events };
+          },
+          // New function for proactive assistant
+          async getUpcomingSchedule() {
+            if (!currentUser) return { type: 'message', data: 'Lỗi: Vui lòng đăng nhập.' };
+            const now = new Date();
+            const tomorrow = new Date(now.getTime() + 48 * 60 * 60 * 1000); // 48 hours from now
+
+            const remindersCollection = collection(db, 'users', currentUser.uid, 'reminders');
+            const q = query(remindersCollection, 
+                where("reminderTime", ">=", now), 
+                where("reminderTime", "<=", tomorrow),
+                orderBy("reminderTime", "asc"));
+            
+            const snapshot = await getDocs(q);
+            if (snapshot.empty) {
+                return { type: 'message', data: "Không có lịch trình nào trong 48 giờ tới." };
+            }
+            const schedule = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            return { type: 'schedule', data: schedule };
           }
         };
         const tools = [{ functionDeclarations: [
@@ -373,7 +394,7 @@
         async function initializeAIModel() {
             if (chat) return;
             const ai = getAI(app, { backend: new GoogleAIBackend() });
-            model = getGenerativeModel(ai, { model: "gemini-2.0-flash" });
+            model = getGenerativeModel(ai, { model: "gemini-2.5-flash" });
             chat = model.startChat({ tools: tools });
         }
         function startReminderChecker() {
@@ -424,6 +445,35 @@
             };
         }
         
+        // --- Proactive Assistant ---
+        async function triggerDailySummary() {
+            appendTypingIndicator();
+            const scheduleResult = await agentFunctions.getUpcomingSchedule();
+            removeTypingIndicator();
+
+            if (scheduleResult.type === 'message') { // No events
+                appendAIMessage({ type: 'message', data: `Chào buổi sáng! Hôm nay bạn có một ngày khá trống trải. Bạn muốn bắt đầu với việc gì?` });
+                return;
+            }
+
+            const context = `Dữ liệu lịch trình sắp tới của người dùng:\n` + 
+                          scheduleResult.data.map(item => {
+                              const content = item.text || item.title;
+                              const time = `Thời gian: ${item.reminderTime.toDate().toLocaleString('vi-VN')}`;
+                              const priority = `Ưu tiên: ${item.priority || 'trung bình'}`;
+                              return `- Nội dung: "${content}", ${time}, ${priority}`;
+                          }).join('\n');
+
+            const summarizationPrompt = `Bạn là một trợ lý ảo chủ động và thông minh. Bây giờ là buổi sáng. Dựa vào lịch trình sau của người dùng:\n${context}\n\nHãy chào buổi sáng người dùng và đưa ra một bản tóm tắt ngắn gọn về ngày hôm nay và ngày mai. Phân tích xem có xung đột nào không, lịch trình có quá dày đặc không, và gợi ý những việc cần chuẩn bị. Trả lời một cách thân thiện và chủ động.`;
+            
+            appendTypingIndicator();
+            const summaryResult = await model.generateContent(summarizationPrompt);
+            const summaryResponse = summaryResult.response;
+            removeTypingIndicator();
+            appendAIMessage({ type: 'message', data: summaryResponse.text() });
+        }
+
+
         // --- Main Prompt Handling Logic ---
         async function handlePrompt() {
             const promptText = promptInput.value.trim();
@@ -437,64 +487,52 @@
             try {
                 const now = new Date();
                 const formattedDate = now.toLocaleString('vi-VN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-                const fullPrompt = `Bối cảnh: Thời gian hiện tại là ${formattedDate}. Dựa vào thông tin này, hãy thực hiện yêu cầu sau của người dùng: "${promptText}"`;
+                
+                let fullPrompt = `Bối cảnh: Thời gian hiện tại là ${formattedDate}. Dựa vào thông tin này, hãy thực hiện yêu cầu sau của người dùng: "${promptText}"`;
+                
+                if (conversationContext) {
+                    fullPrompt = `Dựa vào ngữ cảnh sau đây:\n${conversationContext}\n\nHãy trả lời câu hỏi tiếp theo của người dùng: "${promptText}"`;
+                }
 
                 let result = await chat.sendMessage(fullPrompt);
                 let response = result.response;
                 let functionCalls = response.functionCalls();
                 
-                const isQuestion = ['mấy giờ', 'khi nào', 'ở đâu', 'cái gì', 'ai', 'tại sao', 'quan trọng', 'ưu tiên'].some(q => promptText.toLowerCase().includes(q));
-                if (isQuestion && functionCalls && functionCalls.length === 1 && functionCalls[0].name.startsWith('search')) {
-                    const func = functionCalls[0];
-                    const functionResult = await agentFunctions[func.name](func.args);
+                let searchResultData = null;
+                let searchResultType = null;
 
-                    removeTypingIndicator();
-
-                    if (functionResult.type === 'message') {
-                        appendAIMessage(functionResult);
-                    } else {
-                        const context = functionResult.data.map(item => {
-                            const content = item.text || item.title;
-                            const time = item.reminderTime ? `Thời gian nhắc: ${item.reminderTime.toDate().toLocaleString('vi-VN')}` : `Tạo lúc: ${item.createdAt.toDate().toLocaleString('vi-VN')}`;
-                            const priority = `Mức độ ưu tiên: ${item.priority || 'trung bình'}`;
-                            return `- Nội dung: "${content}", ${time}, ${priority}`;
-                        }).join('\n');
-
-                        const summarizationPrompt = `Dựa vào thông tin sau:\n${context}\n\nHãy trả lời câu hỏi ban đầu của người dùng một cách tự nhiên và trực tiếp: "${promptText}"`;
-                        
-                        appendTypingIndicator();
-                        const summaryResult = await model.generateContent(summarizationPrompt);
-                        const summaryResponse = summaryResult.response;
-                        removeTypingIndicator();
-                        
-                        appendAIMessage({ type: 'message', data: summaryResponse.text() });
-                        appendAIMessage(functionResult);
-                    }
-                } else {
-                    while (functionCalls && functionCalls.length > 0) {
-                        const functionResponses = [];
-                        let hasRenderedSomething = false;
-
-                        for (const func of functionCalls) {
-                            if (agentFunctions[func.name]) {
-                                const functionResult = await agentFunctions[func.name](func.args);
-                                if (['notes', 'reminders', 'calendar'].includes(functionResult.type)) {
-                                    appendAIMessage(functionResult);
-                                    hasRenderedSomething = true;
-                                }
-                                functionResponses.push({ functionResponse: { name: func.name, response: functionResult } });
+                if (functionCalls && functionCalls.length > 0) {
+                    const functionResponses = [];
+                    for (const func of functionCalls) {
+                        if (agentFunctions[func.name]) {
+                            const functionResult = await agentFunctions[func.name](func.args);
+                            
+                            if (func.name.startsWith('search') && functionResult.type !== 'message') {
+                                searchResultData = functionResult.data;
+                                searchResultType = functionResult.type;
+                            } else if (['notes', 'reminders', 'calendar'].includes(functionResult.type)) {
+                                appendAIMessage(functionResult);
+                                conversationContext = null;
                             }
-                        }
-                        
-                        if (hasRenderedSomething) {
-                             functionCalls = null;
-                        } else {
-                            result = await chat.sendMessage(functionResponses);
-                            response = result.response;
-                            functionCalls = response.functionCalls();
+                            
+                            functionResponses.push({ functionResponse: { name: func.name, response: functionResult } });
                         }
                     }
-                    removeTypingIndicator();
+                    
+                    result = await chat.sendMessage(functionResponses);
+                    response = result.response;
+                }
+
+                removeTypingIndicator();
+                
+                if (searchResultData) {
+                    conversationContext = `Ngữ cảnh: Người dùng vừa tìm thấy ${searchResultType === 'notes' ? 'ghi chú' : 'lời nhắc'} sau:\n` + 
+                                          searchResultData.map(item => `- Nội dung: "${item.text || item.title}"`).join('\n');
+                    
+                    appendAIMessage({ type: 'message', data: response.text() });
+                    appendAIMessage({ type: searchResultType, data: searchResultData });
+                } else {
+                    conversationContext = null;
                     if(response.text()) {
                          appendAIMessage({ type: 'message', data: response.text() });
                     }
@@ -502,6 +540,7 @@
 
             } catch (error) {
                 appendAIMessage({ type: 'message', data: `**Lỗi:** ${error.message}.` });
+                conversationContext = null;
             } finally {
                 setControlsEnabled(true);
             }
