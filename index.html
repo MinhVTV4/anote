@@ -12,6 +12,8 @@
     <script src="https://unpkg.com/lucide@latest"></script>
     <!-- FullCalendar CDN -->
     <script src='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.11/index.global.min.js'></script>
+    <!-- Tesseract.js (OCR) CDN -->
+    <script src='https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js'></script>
     <style>
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
         @keyframes pulse { 0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); } 50% { transform: scale(1.05); box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); } }
@@ -67,7 +69,11 @@
 
         <footer id="controls" class="p-4 border-t bg-gray-50 rounded-b-xl flex-shrink-0">
             <div class="relative">
-                <textarea id="promptInput" rows="1" class="w-full p-3 pr-14 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 resize-none" placeholder="Thử: 'phân tích thói quen của tôi'" disabled></textarea>
+                <input type="file" id="fileInput" class="hidden" accept=".txt,.png,.jpg,.jpeg">
+                <button id="attachmentButton" title="Đính kèm file" class="absolute left-2 top-1/2 -translate-y-1/2 p-2 rounded-full text-gray-500 hover:bg-gray-100 hover:text-blue-600 transition-colors">
+                    <i data-lucide="paperclip" class="w-5 h-5"></i>
+                </button>
+                <textarea id="promptInput" rows="1" class="w-full p-3 pl-12 pr-14 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 resize-none" placeholder="Thử: 'phân tích thói quen của tôi'" disabled></textarea>
                 <button id="micButton" title="Bắt đầu ghi âm" class="mic-btn absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-full text-gray-500 hover:bg-gray-100 hover:text-blue-600 transition-colors" disabled>
                     <i data-lucide="mic" class="w-5 h-5"></i>
                 </button>
@@ -87,6 +93,7 @@
             <div id="quickActions" class="mt-2 flex items-center justify-center gap-2">
                 <button id="quickActionAllNotes" class="px-3 py-1 bg-gray-200 text-gray-700 text-sm rounded-full hover:bg-gray-300 transition-colors">Tất cả ghi chú</button>
                 <button id="quickActionAllReminders" class="px-3 py-1 bg-gray-200 text-gray-700 text-sm rounded-full hover:bg-gray-300 transition-colors">Tất cả lời nhắc</button>
+                <button id="quickActionAllProjects" class="px-3 py-1 bg-gray-200 text-gray-700 text-sm rounded-full hover:bg-gray-300 transition-colors">Tất cả dự án</button>
             </div>
 
             <button id="sendPromptButton" class="mt-2 w-full flex justify-center items-center gap-3 px-4 py-3 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 disabled:bg-blue-300" disabled>
@@ -151,6 +158,8 @@
         const projectInput = document.getElementById('projectInput');
         const projectList = document.getElementById('projectList');
         const clearProjectBtn = document.getElementById('clearProjectBtn');
+        const attachmentButton = document.getElementById('attachmentButton');
+        const fileInput = document.getElementById('fileInput');
 
         let model, chat, currentUser, reminderIntervalId;
         let conversationContext = null;
@@ -443,11 +452,15 @@
             return { type: 'schedule', data: schedule };
           },
           async getAllProjects() {
-            if (!currentUser) return [];
+            if (!currentUser) return { type: 'message', data: "Lỗi: Vui lòng đăng nhập." };
             const projectsCollection = collection(db, 'users', currentUser.uid, 'projects');
             const q = query(projectsCollection, orderBy("createdAt", "desc"));
             const snapshot = await getDocs(q);
-            return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            if (snapshot.empty) {
+                return { type: 'message', data: "Bạn chưa có dự án nào." };
+            }
+            const projects = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            return { type: 'projects', data: projects };
           },
           async getItemsByProject(args) {
             if (!currentUser) return { type: 'message', data: 'Lỗi: Vui lòng đăng nhập.' };
@@ -561,11 +574,51 @@
             const reminders = remindersSnapshot.docs.map(doc => doc.data().title);
 
             const allActivities = [...notes, ...reminders];
-            if (allActivities.length < 5) { // Need enough data to analyze
+            if (allActivities.length < 5) {
                 return { type: 'message', data: "Tôi cần thêm dữ liệu hoạt động của bạn để có thể đưa ra phân tích hữu ích." };
             }
             
             return { type: 'analysis', data: allActivities.join('\n') };
+          },
+          async mergeProjects(args) {
+            if (!currentUser) return { type: 'message', data: 'Lỗi: Vui lòng đăng nhập.' };
+            const { sourceProjectName, destinationProjectName } = args;
+
+            if (!sourceProjectName || !destinationProjectName) return { type: 'message', data: 'Vui lòng cung cấp cả tên dự án nguồn và đích.' };
+            if (sourceProjectName.toLowerCase() === destinationProjectName.toLowerCase()) return { type: 'message', data: 'Không thể gộp một dự án vào chính nó.' };
+
+            const projectsCollection = collection(db, 'users', currentUser.uid, 'projects');
+            
+            const sourceQuery = query(projectsCollection, where("name", "==", sourceProjectName));
+            const sourceSnapshot = await getDocs(sourceQuery);
+            if (sourceSnapshot.empty) return { type: 'message', data: `Không tìm thấy dự án nguồn "${sourceProjectName}".` };
+            const sourceDoc = sourceSnapshot.docs[0];
+            const sourceId = sourceDoc.id;
+
+            const destQuery = query(projectsCollection, where("name", "==", destinationProjectName));
+            const destSnapshot = await getDocs(destQuery);
+            if (destSnapshot.empty) return { type: 'message', data: `Không tìm thấy dự án đích "${destinationProjectName}".` };
+            const destDoc = destSnapshot.docs[0];
+            const destId = destDoc.id;
+            const destName = destDoc.data().name;
+
+            const batch = writeBatch(db);
+
+            const notesCollection = collection(db, 'users', currentUser.uid, 'notes');
+            const notesQuery = query(notesCollection, where("projectId", "==", sourceId));
+            const notesSnapshot = await getDocs(notesQuery);
+            notesSnapshot.forEach(doc => batch.update(doc.ref, { projectId: destId, projectName: destName }));
+
+            const remindersCollection = collection(db, 'users', currentUser.uid, 'reminders');
+            const remindersQuery = query(remindersCollection, where("projectId", "==", sourceId));
+            const remindersSnapshot = await getDocs(remindersQuery);
+            remindersSnapshot.forEach(doc => batch.update(doc.ref, { projectId: destId, projectName: destName }));
+            
+            batch.delete(sourceDoc.ref);
+
+            await batch.commit();
+            await updateProjectDatalist();
+            return { type: 'message', data: `✅ Đã gộp thành công dự án "${sourceProjectName}" vào "${destinationProjectName}".` };
           }
         };
         const tools = [{ functionDeclarations: [
@@ -581,24 +634,31 @@
             { name: "updateReminderInFirestore", description: "Cập nhật nội dung, thời gian và/hoặc độ ưu tiên của một lời nhắc cá nhân của người dùng.", parameters: { type: "object", properties: { "id": { "type": "string" }, "newTitle": { "type": "string" }, "newTime": { "type": "string", "description": "Thời gian mới, định dạng ISO 8601."}, "newPriority": { "type": "string", "enum": ["high", "medium", "low"] } }, required: ["id"] } },
             { name: "deleteReminderFromFirestore", description: "Xóa một lời nhắc cá nhân của người dùng dựa trên ID.", parameters: { type: "object", properties: { "id": { "type": "string" } }, required: ["id"] } },
             { name: "getEventsForCalendar", description: "Lấy tất cả sự kiện, lời nhắc cá nhân của người dùng để hiển thị trên lịch.", parameters: { type: "object", properties: {} } },
+            { name: "getAllProjects", description: "Lấy và hiển thị danh sách TẤT CẢ các dự án hiện có của người dùng.", parameters: { type: "object", properties: {} } },
             { name: "getItemsByProject", description: "Lấy và hiển thị tất cả các ghi chú và lời nhắc thuộc về một dự án cụ thể.", parameters: { type: "object", properties: { "projectName": { "type": "string", "description": "Tên của dự án cần tìm." } }, required: ["projectName"] } },
             { name: "updateProjectName", description: "Đổi tên một dự án. Cần có tên cũ và tên mới.", parameters: { type: "object", properties: { "oldName": { "type": "string", "description": "Tên dự án hiện tại." }, "newName": { "type": "string", "description": "Tên dự án mới muốn đổi thành." } }, required: ["oldName", "newName"] } },
             { name: "deleteProject", description: "Xóa một dự án. Các công việc bên trong sẽ không bị xóa mà trở thành chưa phân loại.", parameters: { type: "object", properties: { "projectName": { "type": "string", "description": "Tên của dự án cần xóa." } }, required: ["projectName"] } },
-            { name: "analyzeHistory", description: "Phân tích lịch sử hoạt động của người dùng để tìm ra thói quen và đưa ra gợi ý.", parameters: {type: "object", properties: {}} }
+            { name: "analyzeHistory", description: "Phân tích lịch sử hoạt động của người dùng để tìm ra thói quen và đưa ra gợi ý.", parameters: {type: "object", properties: {}} },
+            { name: "mergeProjects", description: "Gộp tất cả công việc từ một dự án nguồn vào một dự án đích, sau đó xóa dự án nguồn.", parameters: { type: "object", properties: { "sourceProjectName": { "type": "string", "description": "Tên dự án cần gộp đi." }, "destinationProjectName": { "type": "string", "description": "Tên dự án muốn giữ lại và gộp vào." } }, required: ["sourceProjectName", "destinationProjectName"] } }
         ] }];
         
         async function updateProjectDatalist() {
-            const projects = await agentFunctions.getAllProjects();
-            projectList.innerHTML = '';
-            projects.forEach(p => {
-                const option = document.createElement('option');
-                option.value = p.name;
-                projectList.appendChild(option);
-            });
+            const result = await agentFunctions.getAllProjects();
+            if (result.type === 'projects') {
+                const projects = result.data;
+                projectList.innerHTML = '';
+                projects.forEach(p => {
+                    const option = document.createElement('option');
+                    option.value = p.name;
+                    projectList.appendChild(option);
+                });
+            }
         }
 
         async function classifyAndGetProject(content, manualProjectName) {
-            const projects = await agentFunctions.getAllProjects();
+            const projectsResult = await agentFunctions.getAllProjects();
+            const projects = projectsResult.type === 'projects' ? projectsResult.data : [];
+            
             if (manualProjectName) {
                 let project = projects.find(p => p.name.toLowerCase() === manualProjectName.toLowerCase());
                 if (project) {
@@ -628,7 +688,8 @@
         
         async function getProjectSuggestion(text) {
              if (!text || !model) return;
-             const projects = await agentFunctions.getAllProjects();
+             const projectsResult = await agentFunctions.getAllProjects();
+             const projects = projectsResult.type === 'projects' ? projectsResult.data : [];
              const projectNames = projects.map(p => p.name).join(', ') || 'Không có';
              const prompt = `Nội dung sau: "${text}" có liên quan đến dự án nào trong các dự án sau đây không: [${projectNames}]? Nếu có, hãy chỉ trả về tên dự án đó. Nếu không, hãy đặt một cái tên ngắn gọn (2-3 từ) cho một dự án mới dựa trên nội dung này. Chỉ trả lời bằng tên dự án, không có giải thích.`;
              
@@ -728,17 +789,67 @@
             removeTypingIndicator();
             appendAIMessage({ type: 'message', data: summaryResponse.text() });
         }
+        
+        // --- NEW: File Processing Logic ---
+        async function handleFileUpload(file) {
+            if (!file) return;
 
-        async function handlePrompt() {
-            const promptText = promptInput.value.trim();
+            setControlsEnabled(false, `Đang xử lý file: ${file.name}...`);
+            appendUserMessage(`Đã đính kèm file: ${file.name}`);
+            appendTypingIndicator();
+            
+            let extractedText = '';
+            try {
+                if (file.type.startsWith('image/')) {
+                    statusMessage.textContent = 'Đang nhận dạng văn bản từ ảnh (OCR)...';
+                    const worker = await Tesseract.createWorker('eng+vie', 1, {
+                        logger: m => console.log(m) 
+                    });
+                    const { data: { text } } = await worker.recognize(file);
+                    extractedText = text;
+                    await worker.terminate();
+                } else if (file.type === 'text/plain') {
+                    statusMessage.textContent = 'Đang đọc file văn bản...';
+                    extractedText = await file.text();
+                } else {
+                    throw new Error('Định dạng file không được hỗ trợ.');
+                }
+
+                if (extractedText.trim()) {
+                    await processExtractedTextWithAI(extractedText);
+                } else {
+                    throw new Error('Không tìm thấy văn bản nào trong file.');
+                }
+            } catch (error) {
+                removeTypingIndicator();
+                appendAIMessage({ type: 'message', data: `**Lỗi xử lý file:** ${error.message}` });
+            } finally {
+                setControlsEnabled(true);
+                fileInput.value = ''; // Reset input
+            }
+        }
+
+        async function processExtractedTextWithAI(text) {
+            statusMessage.textContent = 'AI đang phân tích nội dung...';
+            const analysisPrompt = `Bạn là một trợ lý thông minh. Hãy phân tích văn bản sau đây được trích xuất từ một tệp do người dùng tải lên. Nhiệm vụ của bạn là xác định bất kỳ thông tin quan trọng, sự kiện, lịch hẹn, hoặc công việc nào. Dựa trên phân tích, hãy gọi các công cụ phù hợp (ví dụ: createReminder, saveNote) để lưu lại thông tin này cho người dùng. Ưu tiên tạo lời nhắc cho các sự kiện có ngày giờ cụ thể. Đây là văn bản cần phân tích:\n\n---VĂN BẢN TRÍCH XUẤT---\n${text}\n---KẾT THÚC VĂN BẢN---`;
+            
+            // This reuses the main prompt handling logic
+            await handlePrompt(analysisPrompt);
+        }
+
+        async function handlePrompt(promptOverride) {
+            const promptText = promptOverride || promptInput.value.trim();
             if (!promptText || !chat) return;
 
-            setControlsEnabled(false);
-            appendUserMessage(promptText);
-            promptInput.value = '';
-            projectInput.value = '';
-            projectSuggestionWrapper.classList.add('h-0', 'opacity-0');
-            appendTypingIndicator();
+            // Only modify UI for user-typed prompts
+            if (!promptOverride) {
+                 setControlsEnabled(false);
+                 appendUserMessage(promptText);
+                 promptInput.value = '';
+                 projectInput.value = '';
+                 projectSuggestionWrapper.classList.add('h-0', 'opacity-0');
+                 appendTypingIndicator();
+            }
 
             try {
                 const now = new Date();
@@ -746,8 +857,10 @@
                 
                 let fullPrompt = `Bối cảnh: Thời gian hiện tại là ${formattedDate}. Dựa vào thông tin này, hãy thực hiện yêu cầu sau của người dùng: "${promptText}"`;
                 
-                if (conversationContext) {
+                if (conversationContext && !promptOverride) {
                     fullPrompt = `Dựa vào ngữ cảnh sau đây:\n${conversationContext}\n\nHãy trả lời câu hỏi tiếp theo của người dùng: "${promptText}"`;
+                } else if (promptOverride) {
+                    fullPrompt = promptText; // Use the analysis prompt directly
                 }
 
                 let result = await chat.sendMessage(fullPrompt);
@@ -775,7 +888,7 @@
                                 const analysisResult = await model.generateContent(analysisPrompt);
                                 functionResult.data = analysisResult.response.text();
                                 appendAIMessage(functionResult);
-                            } else if (['notes', 'reminders', 'calendar', 'projectItems'].includes(functionResult.type)) {
+                            } else if (['notes', 'reminders', 'calendar', 'projectItems', 'projects'].includes(functionResult.type)) {
                                 appendAIMessage(functionResult);
                                 conversationContext = null;
                             }
@@ -810,7 +923,9 @@
                 appendAIMessage({ type: 'message', data: `**Lỗi:** ${error.message}.` });
                 conversationContext = null;
             } finally {
-                setControlsEnabled(true);
+                 if (!promptOverride) {
+                    setControlsEnabled(true);
+                }
             }
         }
 
@@ -818,6 +933,7 @@
             promptInput.disabled = !enabled;
             sendPromptButton.disabled = !enabled;
             micButton.disabled = !enabled;
+            attachmentButton.disabled = !enabled;
             statusMessage.textContent = status;
         }
         function scrollToBottom() { chatContainer.scrollTop = chatContainer.scrollHeight; }
@@ -907,7 +1023,7 @@
             return card;
         }
         function renderResponseContent(container, response) {
-            if (['notes', 'reminders', 'calendar', 'projectItems'].includes(response.type)) {
+            if (['notes', 'reminders', 'calendar', 'projectItems', 'projects'].includes(response.type)) {
                 container.innerHTML = ''; 
                 if (response.type === 'projectItems') {
                     const { projectName, items } = response.data;
@@ -922,7 +1038,27 @@
                         else if (item.type === 'reminder') list.appendChild(createReminderCard(item));
                     });
                     container.appendChild(list);
-                } else {
+                } else if (response.type === 'projects') {
+                    const projects = response.data;
+                    const header = document.createElement('h3');
+                    header.className = "text-lg font-semibold mb-2";
+                    header.textContent = `Danh sách dự án của bạn:`;
+                    container.appendChild(header);
+                    const list = document.createElement('div');
+                    list.className = 'space-y-2';
+                    projects.forEach(project => {
+                        const projectItem = document.createElement('button');
+                        projectItem.className = 'w-full text-left p-2 bg-gray-100 rounded-md hover:bg-gray-200';
+                        projectItem.textContent = project.name;
+                        projectItem.onclick = () => {
+                            promptInput.value = `cho tôi xem tất cả công việc của dự án ${project.name}`;
+                            handlePrompt();
+                        };
+                        list.appendChild(projectItem);
+                    });
+                    container.appendChild(list);
+                }
+                 else {
                      const activeTab = response.type;
                     container.innerHTML = `
                         <div class="border-b border-gray-200 mb-4">
@@ -982,7 +1118,7 @@
         document.getElementById('signupForm').addEventListener('submit', async (e) => { e.preventDefault(); try { await createUserWithEmailAndPassword(auth, document.getElementById('signupEmail').value, document.getElementById('signupPassword').value); document.getElementById('authError').textContent = ''; } catch (error) { document.getElementById('authError').textContent = 'Đăng ký thất bại. Email có thể đã tồn tại.'; } });
         document.getElementById('logoutButton').addEventListener('click', () => signOut(auth));
         
-        sendPromptButton.addEventListener("click", handlePrompt);
+        sendPromptButton.addEventListener("click", () => handlePrompt());
         promptInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
@@ -1005,6 +1141,17 @@
             projectInput.value = '';
         });
 
+        // --- NEW: File Attachment Listeners ---
+        attachmentButton.addEventListener('click', () => {
+            fileInput.click();
+        });
+
+        fileInput.addEventListener('change', (event) => {
+            const file = event.target.files[0];
+            handleFileUpload(file);
+        });
+
+
         document.getElementById('quickActionAllNotes').addEventListener('click', () => {
             promptInput.value = 'hiển thị tất cả ghi chú';
             handlePrompt();
@@ -1012,6 +1159,11 @@
 
         document.getElementById('quickActionAllReminders').addEventListener('click', () => {
             promptInput.value = 'hiển thị tất cả lời nhắc';
+            handlePrompt();
+        });
+
+        document.getElementById('quickActionAllProjects').addEventListener('click', () => {
+            promptInput.value = 'hiển thị tất cả dự án';
             handlePrompt();
         });
 
@@ -1049,6 +1201,7 @@
                     const result = isNote 
                         ? await agentFunctions.deleteNoteFromFirestore({ id })
                         : await agentFunctions.deleteReminderFromFirestore({ id });
+                    removeTypingIndicator(); // Ensure indicator is removed before appending final message
                     appendAIMessage(result);
                     setControlsEnabled(true);
                 };
@@ -1072,7 +1225,7 @@
                             </select>
                         </div>
                     </div>`,
-                    `<button id="cancelDeleteBtn" class="px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300">Hủy</button>
+                    `<button id="cancelEditBtn" class="px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300">Hủy</button>
                      <button id="confirmEditBtn" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">Lưu</button>`
                 );
                 const modalInputText = document.getElementById('modalInputText');
@@ -1086,6 +1239,7 @@
                         setControlsEnabled(false);
                         appendTypingIndicator();
                         const result = await agentFunctions.updateNoteInFirestore({ id, newText, newPriority });
+                        removeTypingIndicator();
                         appendAIMessage(result);
                         setControlsEnabled(true);
                     } else { hideModal(); }
@@ -1130,6 +1284,7 @@
                         setControlsEnabled(false);
                         appendTypingIndicator();
                         const result = await agentFunctions.updateReminderInFirestore({ id, newTitle, newTime, newPriority });
+                        removeTypingIndicator();
                         appendAIMessage(result);
                         setControlsEnabled(true);
                     } else { hideModal(); }
