@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Agentic System Demo - Trợ lý Chủ động</title>
+    <title>Agentic System Demo - Trợ lý Phân tích</title>
     <!-- TailwindCSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Marked.js CDN -->
@@ -27,6 +27,10 @@
         .prose { max-width: 100%; }
         .prose p:first-child { margin-top: 0; }
         .prose p:last-child { margin-bottom: 0; }
+        .prose strong { color: #1d4ed8; }
+
+        /* Project Suggestion */
+        #projectSuggestionWrapper { transition: all 0.3s ease-in-out; }
 
         /* FullCalendar custom styles */
         :root { --fc-border-color: #e5e7eb; --fc-today-bg-color: #eff6ff; }
@@ -63,12 +67,23 @@
 
         <footer id="controls" class="p-4 border-t bg-gray-50 rounded-b-xl flex-shrink-0">
             <div class="relative">
-                <textarea id="promptInput" rows="1" class="w-full p-3 pr-14 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 resize-none" placeholder="Thử: 'việc nào quan trọng nhất?'" disabled></textarea>
+                <textarea id="promptInput" rows="1" class="w-full p-3 pr-14 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 resize-none" placeholder="Thử: 'phân tích thói quen của tôi'" disabled></textarea>
                 <button id="micButton" title="Bắt đầu ghi âm" class="mic-btn absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-full text-gray-500 hover:bg-gray-100 hover:text-blue-600 transition-colors" disabled>
                     <i data-lucide="mic" class="w-5 h-5"></i>
                 </button>
             </div>
             
+            <div id="projectSuggestionWrapper" class="h-0 opacity-0 overflow-hidden mt-2">
+                 <label class="text-xs text-gray-500">Gợi ý dự án:</label>
+                 <div class="flex items-center gap-2">
+                    <input type="text" id="projectInput" list="projectList" class="w-full text-sm p-2 border border-gray-200 rounded-md bg-white" placeholder="Chọn hoặc tạo dự án...">
+                    <datalist id="projectList"></datalist>
+                    <button id="clearProjectBtn" title="Xóa dự án" class="p-2 text-gray-400 hover:text-red-500">
+                        <i data-lucide="x" class="w-4 h-4"></i>
+                    </button>
+                 </div>
+            </div>
+
             <div id="quickActions" class="mt-2 flex items-center justify-center gap-2">
                 <button id="quickActionAllNotes" class="px-3 py-1 bg-gray-200 text-gray-700 text-sm rounded-full hover:bg-gray-300 transition-colors">Tất cả ghi chú</button>
                 <button id="quickActionAllReminders" class="px-3 py-1 bg-gray-200 text-gray-700 text-sm rounded-full hover:bg-gray-300 transition-colors">Tất cả lời nhắc</button>
@@ -100,7 +115,7 @@
         // --- Firebase and DOM Elements ---
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.9.0/firebase-app.js";
         import { getAI, getGenerativeModel, GoogleAIBackend } from "https://www.gstatic.com/firebasejs/11.9.0/firebase-ai.js";
-        import { getFirestore, collection, addDoc, getDocs, query, orderBy, doc, deleteDoc, updateDoc, where } from "https://www.gstatic.com/firebasejs/11.9.0/firebase-firestore.js";
+        import { getFirestore, collection, addDoc, getDocs, query, orderBy, doc, deleteDoc, updateDoc, where, writeBatch, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.9.0/firebase-firestore.js";
         import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.9.0/firebase-auth.js";
 
         const firebaseConfig = {
@@ -115,6 +130,8 @@
         const db = getFirestore(app);
         const auth = getAuth(app);
         
+        const weatherApiKey = '49fe688019175179048225c3d4184eae';
+
         const authContainer = document.getElementById('authContainer');
         authContainer.innerHTML = `<div class="bg-white p-8 rounded-xl shadow-lg"><div id="loginView"><h2 class="text-2xl font-bold text-center text-gray-800 mb-6">Đăng nhập</h2><form id="loginForm" class="space-y-4"><input type="email" id="loginEmail" placeholder="Email" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" required><input type="password" id="loginPassword" placeholder="Mật khẩu" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" required><button type="submit" class="w-full py-3 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700">Đăng nhập</button></form><p class="text-center text-sm text-gray-600 mt-4">Chưa có tài khoản? <a href="#" id="showSignup" class="font-medium text-blue-600 hover:underline">Đăng ký</a></p></div><div id="signupView" class="hidden"><h2 class="text-2xl font-bold text-center text-gray-800 mb-6">Đăng ký</h2><form id="signupForm" class="space-y-4"><input type="email" id="signupEmail" placeholder="Email" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" required><input type="password" id="signupPassword" placeholder="Mật khẩu (ít nhất 6 ký tự)" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" required><button type="submit" class="w-full py-3 bg-green-600 text-white font-semibold rounded-lg shadow-md hover:bg-green-700">Đăng ký</button></form><p class="text-center text-sm text-gray-600 mt-4">Đã có tài khoản? <a href="#" id="showLogin" class="font-medium text-blue-600 hover:underline">Đăng nhập</a></p></div><p id="authError" class="text-red-500 text-sm text-center mt-4 h-4"></p></div>`;
 
@@ -130,6 +147,10 @@
         const modalTitle = document.getElementById('modalTitle');
         const modalBody = document.getElementById('modalBody');
         const modalActions = document.getElementById('modalActions');
+        const projectSuggestionWrapper = document.getElementById('projectSuggestionWrapper');
+        const projectInput = document.getElementById('projectInput');
+        const projectList = document.getElementById('projectList');
+        const clearProjectBtn = document.getElementById('clearProjectBtn');
 
         let model, chat, currentUser, reminderIntervalId;
         let conversationContext = null;
@@ -160,7 +181,18 @@
                 appContainer.classList.remove('hidden');
                 userEmail.textContent = user.email;
                 chatContainer.innerHTML = '';
-                await initializeSystems(); 
+                await initializeSystems();
+                
+                const today = new Date().toISOString().split('T')[0];
+                const lastSummaryDate = localStorage.getItem('lastSummaryDate');
+
+                if (lastSummaryDate !== today) {
+                    await triggerDailySummary();
+                    localStorage.setItem('lastSummaryDate', today);
+                } else {
+                    appendAIMessage({ type: 'message', data: `Chào mừng bạn trở lại!` });
+                }
+
             } else {
                 authContainer.classList.remove('hidden');
                 appContainer.classList.add('hidden');
@@ -176,7 +208,7 @@
                 await initializeAIModel();
                 initializeSpeechRecognition();
                 startReminderChecker();
-                await triggerDailySummary(); // Trigger proactive summary
+                await updateProjectDatalist();
                 setControlsEnabled(true);
             } catch (e) {
                 appendAIMessage({ type: 'message', data: `**Lỗi nghiêm trọng khi khởi tạo:** ${e.message}` });
@@ -186,18 +218,49 @@
 
         // --- Agent Functions ---
         const agentFunctions = {
+          async getWeatherForecast(args) {
+            const city = args.city;
+            if (!city) {
+                return { type: 'message', data: 'Vui lòng cho tôi biết bạn muốn xem thời tiết ở thành phố nào.' };
+            }
+            const url = `https://api.openweathermap.org/data/2.5/weather?q=${city}&appid=${weatherApiKey}&units=metric&lang=vi`;
+            try {
+                const response = await fetch(url);
+                if (!response.ok) {
+                    return { type: 'message', data: `Rất tiếc, tôi không tìm thấy thông tin thời tiết cho thành phố ${city}.` };
+                }
+                const data = await response.json();
+                const description = data.weather[0].description;
+                const temp = Math.round(data.main.temp);
+                const humidity = data.main.humidity;
+                const windSpeed = data.wind.speed;
+
+                return {
+                    type: 'message',
+                    data: `Thời tiết hiện tại ở **${city}**: **${temp}°C**, ${description}. Độ ẩm **${humidity}%**, tốc độ gió **${windSpeed} m/s**.`
+                };
+            } catch (error) {
+                console.error('Lỗi khi gọi API thời tiết:', error);
+                return { type: 'message', data: 'Đã có lỗi xảy ra khi lấy thông tin thời tiết.' };
+            }
+          },
           async saveNote(args) {
             if (!currentUser) return { type: 'message', data: 'Lỗi: Vui lòng đăng nhập.' };
             const notesCollection = collection(db, 'users', currentUser.uid, 'notes');
             const text = args.text || '';
             const keywords = await generateKeywordsWithAI(text);
+            const { projectId, projectName } = await classifyAndGetProject(text, args.projectName);
+
             await addDoc(notesCollection, { 
                 text: text, 
-                createdAt: new Date(),
+                createdAt: serverTimestamp(),
                 priority: args.priority || 'medium',
-                keywords: keywords
+                keywords: keywords,
+                projectId: projectId,
+                projectName: projectName
             });
-            return { type: 'message', data: `✅ Đã lưu ghi chú: "${args.text}"` };
+            await updateProjectDatalist();
+            return { type: 'message', data: `✅ Đã lưu ghi chú vào dự án **${projectName}**.` };
           },
           async getAllNotesFromFirestore() {
             if (!currentUser) return { type: 'message', data: 'Lỗi: Vui lòng đăng nhập.' };
@@ -267,15 +330,20 @@
             const remindersCollection = collection(db, 'users', currentUser.uid, 'reminders');
             const title = args.title || '';
             const keywords = await generateKeywordsWithAI(title);
+            const { projectId, projectName } = await classifyAndGetProject(title, args.projectName);
+
             await addDoc(remindersCollection, { 
                 title: title, 
                 reminderTime: new Date(args.reminderTime),
-                createdAt: new Date(),
+                createdAt: serverTimestamp(),
                 triggered: false,
                 priority: args.priority || 'medium',
-                keywords: keywords
+                keywords: keywords,
+                projectId: projectId,
+                projectName: projectName
             });
-            return { type: 'message', data: `✅ Đã tạo lời nhắc: "${args.title}"` };
+             await updateProjectDatalist();
+            return { type: 'message', data: `✅ Đã tạo lời nhắc trong dự án **${projectName}**.` };
           },
           async getAllRemindersFromFirestore() {
             if (!currentUser) return { type: 'message', data: 'Lỗi: Vui lòng đăng nhập.' };
@@ -356,11 +424,10 @@
             });
             return { type: 'calendar', data: events };
           },
-          // New function for proactive assistant
           async getUpcomingSchedule() {
             if (!currentUser) return { type: 'message', data: 'Lỗi: Vui lòng đăng nhập.' };
             const now = new Date();
-            const tomorrow = new Date(now.getTime() + 48 * 60 * 60 * 1000); // 48 hours from now
+            const tomorrow = new Date(now.getTime() + 48 * 60 * 60 * 1000);
 
             const remindersCollection = collection(db, 'users', currentUser.uid, 'reminders');
             const q = query(remindersCollection, 
@@ -374,23 +441,212 @@
             }
             const schedule = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             return { type: 'schedule', data: schedule };
+          },
+          async getAllProjects() {
+            if (!currentUser) return [];
+            const projectsCollection = collection(db, 'users', currentUser.uid, 'projects');
+            const q = query(projectsCollection, orderBy("createdAt", "desc"));
+            const snapshot = await getDocs(q);
+            return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          },
+          async getItemsByProject(args) {
+            if (!currentUser) return { type: 'message', data: 'Lỗi: Vui lòng đăng nhập.' };
+            const { projectName } = args;
+            
+            const projectsCollection = collection(db, 'users', currentUser.uid, 'projects');
+            const projectQuery = query(projectsCollection, where("name", "==", projectName));
+            const projectSnapshot = await getDocs(projectQuery);
+
+            if (projectSnapshot.empty) {
+                return { type: 'message', data: `Không tìm thấy dự án nào có tên "${projectName}".` };
+            }
+            const projectId = projectSnapshot.docs[0].id;
+
+            const notesCollection = collection(db, 'users', currentUser.uid, 'notes');
+            const notesQuery = query(notesCollection, where("projectId", "==", projectId));
+            const notesSnapshot = await getDocs(notesQuery);
+            const notes = notesSnapshot.docs.map(doc => ({ type: 'note', ...doc.data(), id: doc.id }));
+
+            const remindersCollection = collection(db, 'users', currentUser.uid, 'reminders');
+            const remindersQuery = query(remindersCollection, where("projectId", "==", projectId));
+            const remindersSnapshot = await getDocs(remindersQuery);
+            const reminders = remindersSnapshot.docs.map(doc => ({ type: 'reminder', ...doc.data(), id: doc.id }));
+            
+            const allItems = [...notes, ...reminders];
+            if (allItems.length === 0) {
+                 return { type: 'message', data: `Dự án "${projectName}" chưa có công việc nào.` };
+            }
+            
+            allItems.sort((a, b) => (b.createdAt?.toDate() || 0) - (a.createdAt?.toDate() || 0));
+
+            return { type: 'projectItems', data: { projectName, items: allItems } };
+          },
+          async updateProjectName(args) {
+            if (!currentUser) return { type: 'message', data: 'Lỗi: Vui lòng đăng nhập.' };
+            const { oldName, newName } = args;
+
+            if (!oldName || !newName) return { type: 'message', data: 'Vui lòng cung cấp cả tên cũ và tên mới.' };
+
+            const projectsCollection = collection(db, 'users', currentUser.uid, 'projects');
+            const projectQuery = query(projectsCollection, where("name", "==", oldName));
+            const projectSnapshot = await getDocs(projectQuery);
+
+            if (projectSnapshot.empty) {
+                return { type: 'message', data: `Không tìm thấy dự án nào có tên "${oldName}".` };
+            }
+            const projectDoc = projectSnapshot.docs[0];
+            const projectId = projectDoc.id;
+
+            const batch = writeBatch(db);
+            batch.update(projectDoc.ref, { name: newName });
+
+            const notesCollection = collection(db, 'users', currentUser.uid, 'notes');
+            const notesQuery = query(notesCollection, where("projectId", "==", projectId));
+            const notesSnapshot = await getDocs(notesQuery);
+            notesSnapshot.forEach(doc => batch.update(doc.ref, { projectName: newName }));
+
+            const remindersCollection = collection(db, 'users', currentUser.uid, 'reminders');
+            const remindersQuery = query(remindersCollection, where("projectId", "==", projectId));
+            const remindersSnapshot = await getDocs(remindersQuery);
+            remindersSnapshot.forEach(doc => batch.update(doc.ref, { projectName: newName }));
+
+            await batch.commit();
+            await updateProjectDatalist();
+            return { type: 'message', data: `✅ Đã đổi tên dự án từ "${oldName}" thành "${newName}".` };
+          },
+          async deleteProject(args) {
+            if (!currentUser) return { type: 'message', data: 'Lỗi: Vui lòng đăng nhập.' };
+            const { projectName } = args;
+            
+            const projectsCollection = collection(db, 'users', currentUser.uid, 'projects');
+            const projectQuery = query(projectsCollection, where("name", "==", projectName));
+            const projectSnapshot = await getDocs(projectQuery);
+
+            if (projectSnapshot.empty) {
+                return { type: 'message', data: `Không tìm thấy dự án nào có tên "${projectName}".` };
+            }
+            const projectDoc = projectSnapshot.docs[0];
+            const projectId = projectDoc.id;
+
+            const batch = writeBatch(db);
+
+            const notesCollection = collection(db, 'users', currentUser.uid, 'notes');
+            const notesQuery = query(notesCollection, where("projectId", "==", projectId));
+            const notesSnapshot = await getDocs(notesQuery);
+            notesSnapshot.forEach(doc => batch.update(doc.ref, { projectId: null, projectName: null }));
+
+            const remindersCollection = collection(db, 'users', currentUser.uid, 'reminders');
+            const remindersQuery = query(remindersCollection, where("projectId", "==", projectId));
+            const remindersSnapshot = await getDocs(remindersQuery);
+            remindersSnapshot.forEach(doc => batch.update(doc.ref, { projectId: null, projectName: null }));
+            
+            batch.delete(projectDoc.ref);
+
+            await batch.commit();
+            await updateProjectDatalist();
+            return { type: 'message', data: `✅ Đã xóa dự án "${projectName}". Các công việc bên trong đã được chuyển thành "chưa phân loại".` };
+          },
+          async analyzeHistory() {
+            if (!currentUser) return { type: 'message', data: 'Lỗi: Vui lòng đăng nhập.' };
+            const thirtyDaysAgo = new Date(new Date().setDate(new Date().getDate() - 30));
+            
+            const notesCollection = collection(db, 'users', currentUser.uid, 'notes');
+            const notesQuery = query(notesCollection, where("createdAt", ">=", thirtyDaysAgo));
+            const notesSnapshot = await getDocs(notesQuery);
+            const notes = notesSnapshot.docs.map(doc => doc.data().text);
+
+            const remindersCollection = collection(db, 'users', currentUser.uid, 'reminders');
+            const remindersQuery = query(remindersCollection, where("createdAt", ">=", thirtyDaysAgo));
+            const remindersSnapshot = await getDocs(remindersQuery);
+            const reminders = remindersSnapshot.docs.map(doc => doc.data().title);
+
+            const allActivities = [...notes, ...reminders];
+            if (allActivities.length < 5) { // Need enough data to analyze
+                return { type: 'message', data: "Tôi cần thêm dữ liệu hoạt động của bạn để có thể đưa ra phân tích hữu ích." };
+            }
+            
+            return { type: 'analysis', data: allActivities.join('\n') };
           }
         };
         const tools = [{ functionDeclarations: [
-            { name: "saveNote", description: "Lưu một ghi chú cá nhân cho người dùng.", parameters: { type: "object", properties: { "text": { "type": "string" }, "priority": { "type": "string", "enum": ["high", "medium", "low"], "description": "Mức độ ưu tiên." } }, required: ["text"] } },
+            { name: "getWeatherForecast", description: "Lấy thông tin dự báo thời tiết cho một địa điểm cụ thể.", parameters: { type: "object", properties: { "city": { "type": "string", "description": "Tên thành phố, ví dụ: Hà Nội, London." } }, required: ["city"] } },
+            { name: "saveNote", description: "Lưu một ghi chú cá nhân cho người dùng.", parameters: { type: "object", properties: { "text": { "type": "string" }, "priority": { "type": "string", "enum": ["high", "medium", "low"], "description": "Mức độ ưu tiên." }, "projectName": { "type": "string", "description": "Tên dự án người dùng đã chọn hoặc nhập." } }, required: ["text"] } },
             { name: "getAllNotesFromFirestore", description: "Lấy và hiển thị TẤT CẢ các ghi chú cá nhân của người dùng.", parameters: { type: "object", properties: {} } },
             { name: "searchNotes", description: "Tìm kiếm và lấy thông tin từ ghi chú cá nhân của người dùng. Đây là công cụ chính để trả lời các câu hỏi về ghi chú đã lưu. Nếu người dùng chỉ hỏi về thời gian/độ ưu tiên mà không có chủ đề cụ thể, hãy bỏ trống tham số 'query'.", parameters: { type: "object", properties: { "query": { "type": "string", "description": "Chủ đề hoặc nội dung chính cần tìm trong ghi chú." }, "startDate": { "type": "string", "description": "Ngày bắt đầu để tìm kiếm (ngày tạo ghi chú), định dạng ISO 8601." }, "endDate": { "type": "string", "description": "Ngày kết thúc để tìm kiếm (ngày tạo ghi chú), định dạng ISO 8601." }, "priority": { "type": "string", "enum": ["high", "medium", "low"], "description": "Lọc theo mức độ ưu tiên." } } } },
             { name: "deleteNoteFromFirestore", description: "Xóa một ghi chú cá nhân của người dùng dựa trên ID.", parameters: { type: "object", properties: { "id": { "type": "string" } }, required: ["id"] } },
             { name: "updateNoteInFirestore", description: "Cập nhật nội dung và/hoặc độ ưu tiên của một ghi chú cá nhân của người dùng.", parameters: { type: "object", properties: { "id": { "type": "string" }, "newText": { "type": "string" }, "newPriority": { "type": "string", "enum": ["high", "medium", "low"] } }, required: ["id"] } },
-            { name: "createReminder", description: "Tạo một lịch hẹn hoặc lời nhắc cá nhân cho người dùng.", parameters: { type: "object", properties: { "title": { "type": "string" }, "reminderTime": { "type": "string", "description": "Thời gian nhắc, định dạng ISO 8601." }, "priority": { "type": "string", "enum": ["high", "medium", "low"], "description": "Mức độ ưu tiên." } }, required: ["title", "reminderTime"] } },
+            { name: "createReminder", description: "Tạo một lịch hẹn hoặc lời nhắc cá nhân cho người dùng.", parameters: { type: "object", properties: { "title": { "type": "string" }, "reminderTime": { "type": "string", "description": "Thời gian nhắc, định dạng ISO 8601." }, "priority": { "type": "string", "enum": ["high", "medium", "low"], "description": "Mức độ ưu tiên." }, "projectName": { "type": "string", "description": "Tên dự án người dùng đã chọn hoặc nhập." } }, required: ["title", "reminderTime"] } },
             { name: "getAllRemindersFromFirestore", description: "Lấy và hiển thị TẤT CẢ các lời nhắc cá nhân của người dùng.", parameters: { type: "object", properties: {} } },
             { name: "searchReminders", description: "Tìm kiếm và lấy thông tin từ lời nhắc cá nhân của người dùng. Đây là công cụ chính để trả lời các câu hỏi về lời nhắc đã lưu (ví dụ: 'mấy giờ bay?'). Nếu người dùng chỉ hỏi về thời gian/độ ưu tiên mà không có chủ đề cụ thể, hãy bỏ trống tham số 'query'.", parameters: { type: "object", properties: { "query": { "type": "string", "description": "Chủ đề hoặc nội dung chính cần tìm trong lời nhắc." }, "startDate": { "type": "string", "description": "Ngày bắt đầu để tìm kiếm (ngày hẹn), định dạng ISO 8601." }, "endDate": { "type": "string", "description": "Ngày kết thúc để tìm kiếm (ngày hẹn), định dạng ISO 8601." }, "priority": { "type": "string", "enum": ["high", "medium", "low"], "description": "Lọc theo mức độ ưu tiên." } } } },
             { name: "updateReminderInFirestore", description: "Cập nhật nội dung, thời gian và/hoặc độ ưu tiên của một lời nhắc cá nhân của người dùng.", parameters: { type: "object", properties: { "id": { "type": "string" }, "newTitle": { "type": "string" }, "newTime": { "type": "string", "description": "Thời gian mới, định dạng ISO 8601."}, "newPriority": { "type": "string", "enum": ["high", "medium", "low"] } }, required: ["id"] } },
             { name: "deleteReminderFromFirestore", description: "Xóa một lời nhắc cá nhân của người dùng dựa trên ID.", parameters: { type: "object", properties: { "id": { "type": "string" } }, required: ["id"] } },
-            { name: "getEventsForCalendar", description: "Lấy tất cả sự kiện, lời nhắc cá nhân của người dùng để hiển thị trên lịch.", parameters: { type: "object", properties: {} } }
+            { name: "getEventsForCalendar", description: "Lấy tất cả sự kiện, lời nhắc cá nhân của người dùng để hiển thị trên lịch.", parameters: { type: "object", properties: {} } },
+            { name: "getItemsByProject", description: "Lấy và hiển thị tất cả các ghi chú và lời nhắc thuộc về một dự án cụ thể.", parameters: { type: "object", properties: { "projectName": { "type": "string", "description": "Tên của dự án cần tìm." } }, required: ["projectName"] } },
+            { name: "updateProjectName", description: "Đổi tên một dự án. Cần có tên cũ và tên mới.", parameters: { type: "object", properties: { "oldName": { "type": "string", "description": "Tên dự án hiện tại." }, "newName": { "type": "string", "description": "Tên dự án mới muốn đổi thành." } }, required: ["oldName", "newName"] } },
+            { name: "deleteProject", description: "Xóa một dự án. Các công việc bên trong sẽ không bị xóa mà trở thành chưa phân loại.", parameters: { type: "object", properties: { "projectName": { "type": "string", "description": "Tên của dự án cần xóa." } }, required: ["projectName"] } },
+            { name: "analyzeHistory", description: "Phân tích lịch sử hoạt động của người dùng để tìm ra thói quen và đưa ra gợi ý.", parameters: {type: "object", properties: {}} }
         ] }];
+        
+        async function updateProjectDatalist() {
+            const projects = await agentFunctions.getAllProjects();
+            projectList.innerHTML = '';
+            projects.forEach(p => {
+                const option = document.createElement('option');
+                option.value = p.name;
+                projectList.appendChild(option);
+            });
+        }
 
-        // --- Initializations (AI, Reminders, Speech) ---
+        async function classifyAndGetProject(content, manualProjectName) {
+            const projects = await agentFunctions.getAllProjects();
+            if (manualProjectName) {
+                let project = projects.find(p => p.name.toLowerCase() === manualProjectName.toLowerCase());
+                if (project) {
+                    return { projectId: project.id, projectName: project.name };
+                } else {
+                    const projectsCollection = collection(db, 'users', currentUser.uid, 'projects');
+                    const newProjectRef = await addDoc(projectsCollection, { name: manualProjectName, createdAt: serverTimestamp() });
+                    return { projectId: newProjectRef.id, projectName: manualProjectName };
+                }
+            }
+
+            const projectNames = projects.map(p => p.name).join(', ') || 'Không có';
+            const prompt = `Nội dung sau: "${content}" có liên quan đến dự án nào trong các dự án sau đây không: [${projectNames}]? Nếu có, hãy chỉ trả về tên dự án đó. Nếu không, hãy đặt một cái tên ngắn gọn (2-3 từ) cho một dự án mới dựa trên nội dung này. Chỉ trả lời bằng tên dự án, không có giải thích.`;
+            
+            const result = await model.generateContent(prompt);
+            const suggestedName = result.response.text().trim();
+
+            let project = projects.find(p => p.name.toLowerCase() === suggestedName.toLowerCase());
+            if (project) {
+                return { projectId: project.id, projectName: project.name };
+            } else {
+                const projectsCollection = collection(db, 'users', currentUser.uid, 'projects');
+                const newProjectRef = await addDoc(projectsCollection, { name: suggestedName, createdAt: serverTimestamp() });
+                return { projectId: newProjectRef.id, projectName: suggestedName };
+            }
+        }
+        
+        async function getProjectSuggestion(text) {
+             if (!text || !model) return;
+             const projects = await agentFunctions.getAllProjects();
+             const projectNames = projects.map(p => p.name).join(', ') || 'Không có';
+             const prompt = `Nội dung sau: "${text}" có liên quan đến dự án nào trong các dự án sau đây không: [${projectNames}]? Nếu có, hãy chỉ trả về tên dự án đó. Nếu không, hãy đặt một cái tên ngắn gọn (2-3 từ) cho một dự án mới dựa trên nội dung này. Chỉ trả lời bằng tên dự án, không có giải thích.`;
+             
+             const result = await model.generateContent(prompt);
+             const suggestedName = result.response.text().trim();
+             projectInput.value = suggestedName;
+        }
+
+        function debounce(func, delay) {
+            let timeout;
+            return function(...args) {
+                const context = this;
+                clearTimeout(timeout);
+                timeout = setTimeout(() => func.apply(context, args), delay);
+            };
+        }
+        const debouncedGetProjectSuggestion = debounce(getProjectSuggestion, 1000);
+
         async function initializeAIModel() {
             if (chat) return;
             const ai = getAI(app, { backend: new GoogleAIBackend() });
@@ -434,6 +690,7 @@
             recognition.onresult = (event) => {
                 const transcript = event.results[0][0].transcript;
                 promptInput.value = transcript;
+                promptInput.dispatchEvent(new Event('input'));
                 setTimeout(() => handlePrompt(), 200);
             };
             recognition.onerror = (event) => {
@@ -445,13 +702,12 @@
             };
         }
         
-        // --- Proactive Assistant ---
         async function triggerDailySummary() {
             appendTypingIndicator();
             const scheduleResult = await agentFunctions.getUpcomingSchedule();
             removeTypingIndicator();
 
-            if (scheduleResult.type === 'message') { // No events
+            if (scheduleResult.type === 'message') {
                 appendAIMessage({ type: 'message', data: `Chào buổi sáng! Hôm nay bạn có một ngày khá trống trải. Bạn muốn bắt đầu với việc gì?` });
                 return;
             }
@@ -473,8 +729,6 @@
             appendAIMessage({ type: 'message', data: summaryResponse.text() });
         }
 
-
-        // --- Main Prompt Handling Logic ---
         async function handlePrompt() {
             const promptText = promptInput.value.trim();
             if (!promptText || !chat) return;
@@ -482,6 +736,8 @@
             setControlsEnabled(false);
             appendUserMessage(promptText);
             promptInput.value = '';
+            projectInput.value = '';
+            projectSuggestionWrapper.classList.add('h-0', 'opacity-0');
             appendTypingIndicator();
 
             try {
@@ -500,17 +756,26 @@
                 
                 let searchResultData = null;
                 let searchResultType = null;
+                let finalResponseText = null;
 
                 if (functionCalls && functionCalls.length > 0) {
                     const functionResponses = [];
                     for (const func of functionCalls) {
                         if (agentFunctions[func.name]) {
+                            if (func.name === 'saveNote' || func.name === 'createReminder') {
+                                func.args.projectName = projectInput.value.trim();
+                            }
                             const functionResult = await agentFunctions[func.name](func.args);
                             
                             if (func.name.startsWith('search') && functionResult.type !== 'message') {
                                 searchResultData = functionResult.data;
                                 searchResultType = functionResult.type;
-                            } else if (['notes', 'reminders', 'calendar'].includes(functionResult.type)) {
+                            } else if (func.name === 'analyzeHistory' && functionResult.type !== 'message') {
+                                const analysisPrompt = `Bạn là một chuyên gia phân tích thói quen và năng suất. Dựa vào lịch sử hoạt động sau đây của người dùng (mỗi dòng là một hoạt động):\n${functionResult.data}\n\nHãy tìm ra những quy luật, thói quen lặp lại và các công việc định kỳ. Sau đó, hãy đưa ra những nhận xét và gợi ý hữu ích để giúp người dùng cải thiện. Gợi ý phải có tính hành động (ví dụ: đề xuất tạo lời nhắc).`;
+                                const analysisResult = await model.generateContent(analysisPrompt);
+                                functionResult.data = analysisResult.response.text();
+                                appendAIMessage(functionResult);
+                            } else if (['notes', 'reminders', 'calendar', 'projectItems'].includes(functionResult.type)) {
                                 appendAIMessage(functionResult);
                                 conversationContext = null;
                             }
@@ -521,6 +786,7 @@
                     
                     result = await chat.sendMessage(functionResponses);
                     response = result.response;
+                    finalResponseText = response.text();
                 }
 
                 removeTypingIndicator();
@@ -529,16 +795,18 @@
                     conversationContext = `Ngữ cảnh: Người dùng vừa tìm thấy ${searchResultType === 'notes' ? 'ghi chú' : 'lời nhắc'} sau:\n` + 
                                           searchResultData.map(item => `- Nội dung: "${item.text || item.title}"`).join('\n');
                     
-                    appendAIMessage({ type: 'message', data: response.text() });
+                    appendAIMessage({ type: 'message', data: finalResponseText });
                     appendAIMessage({ type: searchResultType, data: searchResultData });
+
                 } else {
                     conversationContext = null;
-                    if(response.text()) {
-                         appendAIMessage({ type: 'message', data: response.text() });
+                    if(finalResponseText) {
+                         appendAIMessage({ type: 'message', data: finalResponseText });
                     }
                 }
 
             } catch (error) {
+                removeTypingIndicator();
                 appendAIMessage({ type: 'message', data: `**Lỗi:** ${error.message}.` });
                 conversationContext = null;
             } finally {
@@ -546,7 +814,6 @@
             }
         }
 
-        // --- Chat UI and Modal Helper Functions ---
         function setControlsEnabled(enabled, status = '') {
             promptInput.disabled = !enabled;
             sendPromptButton.disabled = !enabled;
@@ -608,8 +875,9 @@
             card.className = `bg-gray-50 p-4 rounded-lg flex justify-between items-start gap-4 ${getPriorityClass(note.priority)}`;
             card.innerHTML = `
                 <div class="flex-grow">
+                    ${note.projectName ? `<p class="text-xs font-semibold text-blue-600 mb-1">${note.projectName}</p>` : ''}
                     <p class="text-gray-800">${note.text}</p>
-                    <p class="text-xs text-gray-500 mt-2">Tạo lúc: ${formatTimestamp(note.createdAt.toDate())}</p>
+                    <p class="text-xs text-gray-500 mt-2">Tạo lúc: ${note.createdAt ? formatTimestamp(note.createdAt.toDate()) : 'Đang xử lý'}</p>
                 </div>
                 <div class="flex-shrink-0 flex items-center gap-2">
                     <button data-note-id="${note.id}" data-note-text="${escapeHTML(note.text)}" data-note-priority="${note.priority || 'medium'}" title="Sửa ghi chú" class="edit-btn p-2 text-blue-500 hover:text-blue-700 hover:bg-blue-100 rounded-full"><i data-lucide="file-pen-line" class="w-4 h-4 pointer-events-none"></i></button>
@@ -625,6 +893,7 @@
             card.className = `bg-yellow-50 p-4 rounded-lg flex justify-between items-start gap-4 ${getPriorityClass(reminder.priority)} ${isTriggered ? 'opacity-50' : ''}`;
             card.innerHTML = `
                 <div class="flex-grow">
+                    ${reminder.projectName ? `<p class="text-xs font-semibold text-blue-600 mb-1">${reminder.projectName}</p>` : ''}
                     <p class="text-gray-800 font-medium ${isTriggered ? 'line-through' : ''}">${reminder.title}</p>
                     <p class="text-sm text-yellow-800 mt-1 flex items-center gap-2">
                         <i data-lucide="bell" class="w-4 h-4"></i>
@@ -638,31 +907,47 @@
             return card;
         }
         function renderResponseContent(container, response) {
-            if (['notes', 'reminders', 'calendar'].includes(response.type)) {
-                const activeTab = response.type;
-                container.innerHTML = `
-                    <div class="border-b border-gray-200 mb-4">
-                        <nav class="-mb-px flex space-x-6" aria-label="Tabs">
-                            <button data-type="notes" class="tab-btn whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm ${activeTab === 'notes' ? 'active' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}">Ghi chú</button>
-                            <button data-type="reminders" class="tab-btn whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm ${activeTab === 'reminders' ? 'active' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}">Lời nhắc</button>
-                            <button data-type="calendar" class="tab-btn whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm ${activeTab === 'calendar' ? 'active' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}">Lịch</button>
-                        </nav>
-                    </div>
-                    <div class="content-area"></div>`;
-                const contentArea = container.querySelector('.content-area');
-                if (activeTab === 'calendar') {
-                    const calDiv = document.createElement('div');
-                    contentArea.appendChild(calDiv);
-                    const calendar = new FullCalendar.Calendar(calDiv, { initialView: 'dayGridMonth', locale: 'vi', headerToolbar: { left: 'prev,next today', center: 'title', right: 'dayGridMonth,timeGridWeek,listWeek' }, events: response.data, height: 'auto' });
-                    setTimeout(() => calendar.render(), 0);
+            if (['notes', 'reminders', 'calendar', 'projectItems'].includes(response.type)) {
+                container.innerHTML = ''; 
+                if (response.type === 'projectItems') {
+                    const { projectName, items } = response.data;
+                    const header = document.createElement('h3');
+                    header.className = "text-lg font-semibold mb-2";
+                    header.textContent = `Công việc cho dự án: ${projectName}`;
+                    container.appendChild(header);
+                    const list = document.createElement('div');
+                    list.className = 'space-y-3';
+                    items.forEach(item => {
+                        if (item.type === 'note') list.appendChild(createNoteCard(item));
+                        else if (item.type === 'reminder') list.appendChild(createReminderCard(item));
+                    });
+                    container.appendChild(list);
                 } else {
-                    contentArea.classList.add('space-y-3');
-                    if (activeTab === 'notes') {
-                        if(response.data.length > 0) response.data.forEach(note => contentArea.appendChild(createNoteCard(note)));
-                        else contentArea.innerHTML = `<p class="text-gray-500 text-center">Không có ghi chú nào.</p>`;
+                     const activeTab = response.type;
+                    container.innerHTML = `
+                        <div class="border-b border-gray-200 mb-4">
+                            <nav class="-mb-px flex space-x-6" aria-label="Tabs">
+                                <button data-type="notes" class="tab-btn whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm ${activeTab === 'notes' ? 'active' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}">Ghi chú</button>
+                                <button data-type="reminders" class="tab-btn whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm ${activeTab === 'reminders' ? 'active' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}">Lời nhắc</button>
+                                <button data-type="calendar" class="tab-btn whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm ${activeTab === 'calendar' ? 'active' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}">Lịch</button>
+                            </nav>
+                        </div>
+                        <div class="content-area"></div>`;
+                    const contentArea = container.querySelector('.content-area');
+                    if (activeTab === 'calendar') {
+                        const calDiv = document.createElement('div');
+                        contentArea.appendChild(calDiv);
+                        const calendar = new FullCalendar.Calendar(calDiv, { initialView: 'dayGridMonth', locale: 'vi', headerToolbar: { left: 'prev,next today', center: 'title', right: 'dayGridMonth,timeGridWeek,listWeek' }, events: response.data, height: 'auto' });
+                        setTimeout(() => calendar.render(), 0);
                     } else {
-                        if(response.data.length > 0) response.data.forEach(reminder => contentArea.appendChild(createReminderCard(reminder)));
-                        else contentArea.innerHTML = `<p class="text-gray-500 text-center">Không có lời nhắc nào.</p>`;
+                        contentArea.classList.add('space-y-3');
+                        if (activeTab === 'notes') {
+                            if(response.data.length > 0) response.data.forEach(note => contentArea.appendChild(createNoteCard(note)));
+                            else contentArea.innerHTML = `<p class="text-gray-500 text-center">Không có ghi chú nào.</p>`;
+                        } else {
+                            if(response.data.length > 0) response.data.forEach(reminder => contentArea.appendChild(createReminderCard(reminder)));
+                            else contentArea.innerHTML = `<p class="text-gray-500 text-center">Không có lời nhắc nào.</p>`;
+                        }
                     }
                 }
             } else {
@@ -672,7 +957,6 @@
         }
         function formatTimestamp(date) { return date.toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric' }); }
         
-        // Modal Functions
         function showModal(title, bodyHtml, actionsHtml) {
             modalTitle.textContent = title;
             modalBody.innerHTML = bodyHtml;
@@ -706,6 +990,21 @@
             }
         });
         
+        promptInput.addEventListener('input', (e) => {
+            const text = e.target.value.toLowerCase();
+            const createKeywords = ['tạo', 'lưu', 'ghi', 'nhắc', 'thêm'];
+            if (createKeywords.some(kw => text.startsWith(kw))) {
+                projectSuggestionWrapper.classList.remove('h-0', 'opacity-0');
+                debouncedGetProjectSuggestion(e.target.value);
+            } else {
+                projectSuggestionWrapper.classList.add('h-0', 'opacity-0');
+            }
+        });
+
+        clearProjectBtn.addEventListener('click', () => {
+            projectInput.value = '';
+        });
+
         document.getElementById('quickActionAllNotes').addEventListener('click', () => {
             promptInput.value = 'hiển thị tất cả ghi chú';
             handlePrompt();
@@ -773,7 +1072,7 @@
                             </select>
                         </div>
                     </div>`,
-                    `<button id="cancelEditBtn" class="px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300">Hủy</button>
+                    `<button id="cancelDeleteBtn" class="px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300">Hủy</button>
                      <button id="confirmEditBtn" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">Lưu</button>`
                 );
                 const modalInputText = document.getElementById('modalInputText');
